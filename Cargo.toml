@@ -1,0 +1,33 @@
+[package]
+name = "mcp-probe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Headless MCP probe for validating server connectivity, discovery, and descriptor compatibility."
+repository = "https://github.com/sednalabs/mcp-probe"
+homepage = "https://github.com/sednalabs/mcp-probe"
+readme = "README.md"
+keywords = ["mcp", "probe", "model-context-protocol", "debugging", "cli"]
+categories = ["command-line-utilities", "development-tools::testing"]
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.46", features = ["derive"] }
+futures-util = "0.3.31"
+oauth2 = "5.0.0"
+reqwest = { version = "0.13.2", default-features = true, features = ["json", "stream"] }
+rmcp = { version = "1.1.0", features = ["client", "server", "macros", "schemars", "auth", "transport-child-process", "transport-io", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
+schemars = "1.2.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+time = { version = "0.3.44", features = ["formatting", "parsing"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "process", "time"] }
+url = "2.5.4"
+
+mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
+mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
