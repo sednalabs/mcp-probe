@@ -25,9 +25,9 @@ const SECURITY_SCHEMES_HINT: &str =
 const INVOCATION_STATUS_HINT: &str =
     "Set `_meta.openai/toolInvocation/invoking` and `_meta.openai/toolInvocation/invoked` to concise strings.";
 const TOOL_ONLY_UI_HINT: &str =
-    "For tool-only ChatGPT connectors, keep widget access disabled and advertise model-only visibility.";
+    "For tool-only ChatGPT connectors, omit UI template metadata and keep model visibility available.";
 const APPS_SDK_UI_HINT: &str =
-    "For Apps SDK UI tools, advertise a component template with `_meta.openai/outputTemplate` or `_meta.ui.resourceUri`.";
+    "For Apps SDK UI tools, advertise a component template with `_meta.ui.resourceUri` or `_meta.openai/outputTemplate`, and keep app visibility available when visibility is explicit.";
 
 /// Descriptor-readiness profile applied after `tools/list` succeeds.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
@@ -453,48 +453,52 @@ fn audit_tool_only_ui_metadata(
         escape_json_pointer("openai/widgetAccessible")
     );
     match meta.get("openai/widgetAccessible") {
-        Some(Value::Bool(false)) => {}
+        None | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => findings.push(finding(
+            ToolSchemaCompatibilitySeverity::Error,
+            "widget_accessible_true_for_tool_only",
+            tool_name,
+            &widget_path,
+            "Tool-only descriptor enables widget-originated tool calls without an Apps SDK UI template.",
+            TOOL_ONLY_UI_HINT,
+            Some(Value::Bool(true)),
+        )),
         Some(value) => findings.push(finding(
             ToolSchemaCompatibilitySeverity::Error,
-            "widget_accessible_not_false",
+            "widget_accessible_not_boolean",
             tool_name,
             &widget_path,
-            "Tool-only descriptor must set `_meta.openai/widgetAccessible` to false.",
+            "`_meta.openai/widgetAccessible` is not a boolean.",
             TOOL_ONLY_UI_HINT,
             Some(value.clone()),
-        )),
-        None => findings.push(finding(
-            ToolSchemaCompatibilitySeverity::Error,
-            "widget_accessible_missing",
-            tool_name,
-            &widget_path,
-            "Tool-only descriptor is missing `_meta.openai/widgetAccessible: false`.",
-            TOOL_ONLY_UI_HINT,
-            Some(meta.clone()),
         )),
     }
 
     let visibility_path = format!("{meta_path}/ui/visibility");
     match meta.pointer("/ui/visibility") {
-        Some(value) if is_model_only_visibility(value) => {}
+        Some(value) if includes_model_visibility(value) => {
+            if includes_app_visibility(value) {
+                findings.push(finding(
+                    ToolSchemaCompatibilitySeverity::Warning,
+                    "tool_only_ui_visibility_includes_app",
+                    tool_name,
+                    &visibility_path,
+                    "Tool-only descriptor explicitly includes app visibility without an Apps SDK UI template.",
+                    TOOL_ONLY_UI_HINT,
+                    Some(value.clone()),
+                ));
+            }
+        }
         Some(value) => findings.push(finding(
             ToolSchemaCompatibilitySeverity::Error,
-            "ui_visibility_not_model_only",
+            "ui_visibility_excludes_model",
             tool_name,
             &visibility_path,
-            "Tool-only descriptor UI visibility is not model-only.",
+            "Tool-only descriptor UI visibility excludes the model.",
             TOOL_ONLY_UI_HINT,
             Some(value.clone()),
         )),
-        None => findings.push(finding(
-            ToolSchemaCompatibilitySeverity::Error,
-            "ui_visibility_missing",
-            tool_name,
-            &visibility_path,
-            "Tool-only descriptor is missing model-only UI visibility metadata.",
-            TOOL_ONLY_UI_HINT,
-            Some(meta.clone()),
-        )),
+        None => {}
     }
 
     if has_apps_ui {
@@ -520,17 +524,60 @@ fn audit_apps_sdk_ui_metadata(
         "{meta_path}/{}",
         escape_json_pointer("openai/widgetAccessible")
     );
-    if !matches!(meta.get("openai/widgetAccessible"), Some(Value::Bool(_))) {
-        findings.push(finding(
-            ToolSchemaCompatibilitySeverity::Error,
-            "widget_accessible_not_boolean",
-            tool_name,
-            &widget_path,
-            "Apps SDK UI descriptor must set `_meta.openai/widgetAccessible` to a boolean.",
-            APPS_SDK_UI_HINT,
-            meta.get("openai/widgetAccessible").cloned(),
-        ));
+    if let Some(value) = meta.get("openai/widgetAccessible") {
+        if !value.is_boolean() {
+            findings.push(finding(
+                ToolSchemaCompatibilitySeverity::Error,
+                "widget_accessible_not_boolean",
+                tool_name,
+                &widget_path,
+                "`_meta.openai/widgetAccessible` is not a boolean.",
+                APPS_SDK_UI_HINT,
+                Some(value.clone()),
+            ));
+        }
     }
+
+    let visibility_path = format!("{meta_path}/ui/visibility");
+    if let Some(value) = meta.pointer("/ui/visibility") {
+        if !includes_app_visibility(value) {
+            findings.push(finding(
+                ToolSchemaCompatibilitySeverity::Error,
+                "ui_visibility_excludes_app",
+                tool_name,
+                &visibility_path,
+                "Apps SDK UI descriptor visibility excludes the app.",
+                APPS_SDK_UI_HINT,
+                Some(value.clone()),
+            ));
+        }
+    }
+}
+
+fn includes_model_visibility(value: &Value) -> bool {
+    visibility_contains(value, is_model_visibility_value)
+}
+
+fn includes_app_visibility(value: &Value) -> bool {
+    visibility_contains(value, is_app_visibility_value)
+}
+
+fn visibility_contains(value: &Value, predicate: fn(&str) -> bool) -> bool {
+    match value {
+        Value::String(value) => predicate(value),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value.as_str().map(predicate).unwrap_or(false)),
+        _ => false,
+    }
+}
+
+fn is_model_visibility_value(value: &str) -> bool {
+    matches!(value, "model" | "model-only" | "model_only")
+}
+
+fn is_app_visibility_value(value: &str) -> bool {
+    matches!(value, "app")
 }
 
 fn has_apps_sdk_ui_template(meta: &Value) -> bool {
@@ -543,23 +590,6 @@ fn has_apps_sdk_ui_template(meta: &Value) -> bool {
             .and_then(Value::as_str)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
-}
-
-fn is_model_only_visibility(value: &Value) -> bool {
-    match value {
-        Value::String(value) => is_model_visibility_value(value),
-        Value::Array(values) if !values.is_empty() => values.iter().all(|value| {
-            value
-                .as_str()
-                .map(is_model_visibility_value)
-                .unwrap_or(false)
-        }),
-        _ => false,
-    }
-}
-
-fn is_model_visibility_value(value: &str) -> bool {
-    matches!(value, "model" | "model-only" | "model_only")
 }
 
 fn audit_schema_node(
@@ -1038,6 +1068,62 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_tool_profile_accepts_tool_only_descriptor_defaults() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.remove("openai/widgetAccessible");
+        meta.remove("ui");
+
+        let step = build_tool_schema_compatibility_step_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::ChatgptTool,
+        );
+
+        assert_eq!(
+            serde_json::to_value(step).expect("serialize step"),
+            json!({
+                "name": "tools.schema_compatibility",
+                "status": "ok"
+            })
+        );
+    }
+
+    #[test]
+    fn chatgpt_tool_profile_rejects_widget_access_without_ui_template() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.insert("openai/widgetAccessible".to_string(), Value::Bool(true));
+
+        let findings = audit_tool_schema_compatibility_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::ChatgptTool,
+        );
+
+        assert_eq!(
+            serde_json::to_value(findings).expect("serialize findings"),
+            json!([{
+                "severity": "error",
+                "code": "widget_accessible_true_for_tool_only",
+                "tool_name": "work_items_read",
+                "schema_path": "/tools/0/_meta/openai~1widgetAccessible",
+                "message": "Tool-only descriptor enables widget-originated tool calls without an Apps SDK UI template.",
+                "hint": TOOL_ONLY_UI_HINT,
+                "fragment": true
+            }])
+        );
+    }
+
+    #[test]
     fn apps_sdk_ui_profile_requires_a_ui_template() {
         let findings = audit_tool_schema_compatibility_for_profile(
             &json!({
@@ -1054,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn apps_sdk_ui_profile_accepts_ui_backed_descriptor() {
+    fn apps_sdk_ui_profile_accepts_openai_output_template_descriptor() {
         let mut descriptor = chatgpt_tool_descriptor();
         let meta = descriptor
             .get_mut("_meta")
@@ -1080,6 +1166,75 @@ mod tests {
                 "name": "tools.schema_compatibility",
                 "status": "ok"
             })
+        );
+    }
+
+    #[test]
+    fn apps_sdk_ui_profile_accepts_standard_resource_uri_descriptor() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.remove("openai/widgetAccessible");
+        meta.insert(
+            "ui".to_string(),
+            json!({
+                "resourceUri": "ui://widget/work-items.html",
+                "visibility": ["model", "app"]
+            }),
+        );
+
+        let step = build_tool_schema_compatibility_step_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::AppsSdkUi,
+        );
+
+        assert_eq!(
+            serde_json::to_value(step).expect("serialize step"),
+            json!({
+                "name": "tools.schema_compatibility",
+                "status": "ok"
+            })
+        );
+    }
+
+    #[test]
+    fn apps_sdk_ui_profile_rejects_explicit_visibility_without_app() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.remove("openai/widgetAccessible");
+        meta.insert(
+            "ui".to_string(),
+            json!({
+                "resourceUri": "ui://widget/work-items.html",
+                "visibility": ["model"]
+            }),
+        );
+
+        let findings = audit_tool_schema_compatibility_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::AppsSdkUi,
+        );
+
+        assert_eq!(
+            serde_json::to_value(findings).expect("serialize findings"),
+            json!([{
+                "severity": "error",
+                "code": "ui_visibility_excludes_app",
+                "tool_name": "work_items_read",
+                "schema_path": "/tools/0/_meta/ui/visibility",
+                "message": "Apps SDK UI descriptor visibility excludes the app.",
+                "hint": APPS_SDK_UI_HINT,
+                "fragment": ["model"]
+            }])
         );
     }
 }
