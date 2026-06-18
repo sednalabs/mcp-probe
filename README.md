@@ -40,6 +40,10 @@ mcp-probe run \
   --descriptor-profile chatgpt_tool
 ```
 
+The `chatgpt_tool` profile checks ChatGPT connector metadata without requiring
+UI template fields. Optional Apps SDK compatibility fields that have documented
+defaults may be omitted; explicitly conflicting values are reported.
+
 Require Apps SDK UI template metadata:
 
 ```bash
@@ -48,6 +52,9 @@ mcp-probe run \
   --url http://127.0.0.1:8000/mcp \
   --descriptor-profile apps_sdk_ui
 ```
+
+The `apps_sdk_ui` profile accepts the standard `_meta.ui.resourceUri` template
+link and the ChatGPT compatibility alias `_meta["openai/outputTemplate"]`.
 
 Render a prompt:
 
