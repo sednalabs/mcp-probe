@@ -1,6 +1,7 @@
 name: scorecard
 
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -33,6 +34,7 @@ jobs:
           publish_results: false
 
       - name: Upload SARIF
+        if: github.event_name != 'pull_request'
         uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
           sarif_file: results.sarif
