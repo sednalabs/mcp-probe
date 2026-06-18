@@ -239,14 +239,23 @@ predicate workflowLevelWritePermission(Workflow workflow, string permissionName)
 }
 
 predicate jobNeedsWritePermission(Job job, string permissionName) {
-  permissionName = "contents" and
-  jobHasPublishingSink(job, _)
+  permissionName = "contents" and (
+    jobHasPublishingSink(job, _) or
+    jobUsesActionMatching(job, "(?i).*(git-auto-commit|add-and-commit).*", _) or
+    exists(string command |
+      jobRunCommand(job, command) and
+      command.regexpMatch("(?is).*\\bgit\\s+push\\b.*")
+    )
+  )
   or
   permissionName = "packages" and
   jobHasPublishingSink(job, _)
   or
-  permissionName = "id-token" and
-  jobHasSigningMarker(job)
+  permissionName = "id-token" and (
+    jobHasSigningMarker(job) or
+    jobUsesActionMatching(job, "(?i)^actions/deploy-pages@.*", _) or
+    jobUsesActionMatching(job, "(?i).*(configure-aws-credentials|google-github-actions/auth|azure/login).*", _)
+  )
   or
   permissionName = "attestations" and
   jobHasNativeAttestationMarker(job)
@@ -262,5 +271,44 @@ predicate jobNeedsWritePermission(Job job, string permissionName) {
   exists(string command |
     jobRunCommand(job, command) and
     command.regexpMatch("(?is).*\\bgh\\s+workflow\\s+run\\b.*")
+  )
+  or
+  permissionName = "pages" and
+  jobUsesActionMatching(job, "(?i)^actions/deploy-pages@.*", _)
+  or
+  permissionName = "deployments" and (
+    jobUsesActionMatching(job, "(?i).*/deployments?.*", _) or
+    exists(string command |
+      jobRunCommand(job, command) and
+      command.regexpMatch("(?is).*\\bgh\\s+api\\b.*/deployments\\b.*")
+    )
+  )
+  or
+  permissionName = "pull-requests" and (
+    jobUsesActionMatching(job, "(?i).*(labeler|github-script|comment-pull-request|pr-comment).*", _) or
+    exists(string command |
+      jobRunCommand(job, command) and
+      command.regexpMatch("(?is).*\\bgh\\s+(pr|api\\b.*/pulls)\\b.*")
+    )
+  )
+  or
+  permissionName = "issues" and (
+    jobUsesActionMatching(job, "(?i).*(github-script|comment-issue|issue-comment).*", _) or
+    exists(string command |
+      jobRunCommand(job, command) and
+      command.regexpMatch("(?is).*\\bgh\\s+(issue|api\\b.*/issues)\\b.*")
+    )
+  )
+  or
+  permissionName = "statuses" and
+  exists(string command |
+    jobRunCommand(job, command) and
+    command.regexpMatch("(?is).*\\bgh\\s+api\\b.*/statuses\\b.*")
+  )
+  or
+  permissionName = "checks" and
+  exists(string command |
+    jobRunCommand(job, command) and
+    command.regexpMatch("(?is).*\\bgh\\s+api\\b.*/check-runs\\b.*")
   )
 }

@@ -112,6 +112,10 @@ predicate sinkAppearsBeforeMask(Run run, string name) {
     "(?is).*(echo|printf|cat|tee|env|printenv|set\\s+-x|GITHUB_STEP_SUMMARY).*\\$(\\{" + name +
       "\\}|" + name + "\\b).*::add-mask::.*\\$(\\{" + name + "\\}|" + name + "\\b).*"
   )
+  or
+  run.getScript().getRawScript().regexpMatch(
+    "(?is).*\\b(env|printenv)\\b.*::add-mask::.*\\$(\\{" + name + "\\}|" + name + "\\b).*"
+  )
 }
 
 bindingset[run, name]
@@ -128,7 +132,7 @@ predicate hasPriorMask(Run run, string name) {
 bindingset[command]
 predicate environmentDumpCommand(string command, string sinkKind) {
   (
-    command.regexpMatch("(?is)^\\s*(env|printenv)\\b.*") or
+    command.regexpMatch("(?is)^\\s*(env|printenv)\\s*([|&>;]|$).*") or
     command.regexpMatch("(?is)^\\s*set\\s*$")
   ) and
   not command.regexpMatch("(?is).*GITHUB_(ENV|OUTPUT|PATH).*") and
