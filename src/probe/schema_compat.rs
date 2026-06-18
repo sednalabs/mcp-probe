@@ -594,12 +594,9 @@ fn visibility_contains(value: &Value, predicate: fn(&str) -> bool) -> bool {
 fn is_valid_visibility(value: &Value) -> bool {
     match value {
         Value::String(value) => is_visibility_value(value),
-        Value::Array(values) if !values.is_empty() => values.iter().all(|value| {
-            value
-                .as_str()
-                .map(is_visibility_value)
-                .unwrap_or(false)
-        }),
+        Value::Array(values) if !values.is_empty() => values
+            .iter()
+            .all(|value| value.as_str().map(is_visibility_value).unwrap_or(false)),
         _ => false,
     }
 }
