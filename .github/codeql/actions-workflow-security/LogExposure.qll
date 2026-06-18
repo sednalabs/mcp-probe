@@ -13,7 +13,7 @@ predicate credentialName(string name) {
 }
 
 predicate directSecretExpression(Expression expr) {
-  expr.getNormalizedExpression().regexpMatch("secrets\\.[A-Za-z_][A-Za-z0-9_]*")
+  expr.getExpression().regexpMatch("secrets\\.[A-Za-z_][A-Za-z0-9_]*")
 }
 
 predicate sensitiveExpression(Expression expr, string sourceKind) {
@@ -76,26 +76,31 @@ predicate sensitiveVariableInRun(Run run, string name, string sourceKind) {
   )
 }
 
+bindingset[name]
+predicate variableReferencePattern(string name, string reference) {
+  reference = "\\$(\\{" + name + "\\}|" + name + "\\b)"
+  or
+  reference = "\\$env:" + name + "\\b"
+  or
+  reference = "%" + name + "%"
+  or
+  reference = "\\$\\{\\{\\s*env\\." + name + "\\s*\\}\\}"
+}
+
 bindingset[command, name]
 predicate commandReferencesVariable(string command, string name) {
-  command.regexpMatch("(?is).*\\$(\\{" + name + "\\}|" + name + "\\b).*")
-  or
-  command.regexpMatch("(?is).*\\$env:" + name + "\\b.*")
-  or
-  command.regexpMatch("(?is).*%" + name + "%.*")
-  or
-  command.regexpMatch("(?is).*\\$\\{\\{\\s*env\\." + name + "\\s*\\}\\}.*")
+  exists(string reference |
+    variableReferencePattern(name, reference) and
+    command.regexpMatch("(?is).*" + reference + ".*")
+  )
 }
 
 bindingset[command, name]
 predicate commandMasksVariable(string command, string name) {
-  command.regexpMatch("(?is).*::add-mask::.*\\$(\\{" + name + "\\}|" + name + "\\b).*")
-  or
-  command.regexpMatch("(?is).*::add-mask::.*\\$env:" + name + "\\b.*")
-  or
-  command.regexpMatch("(?is).*::add-mask::.*%" + name + "%.*")
-  or
-  command.regexpMatch("(?is).*::add-mask::.*\\$\\{\\{\\s*env\\." + name + "\\s*\\}\\}.*")
+  exists(string reference |
+    variableReferencePattern(name, reference) and
+    command.regexpMatch("(?is).*::add-mask::.*" + reference + ".*")
+  )
 }
 
 bindingset[run, name]
@@ -108,13 +113,18 @@ predicate runMasksVariable(Run run, string name) {
 
 bindingset[run, name]
 predicate sinkAppearsBeforeMask(Run run, string name) {
-  run.getScript().getRawScript().regexpMatch(
-    "(?is).*(echo|printf|cat|tee|env|printenv|set\\s+-x|GITHUB_STEP_SUMMARY).*\\$(\\{" + name +
-      "\\}|" + name + "\\b).*::add-mask::.*\\$(\\{" + name + "\\}|" + name + "\\b).*"
-  )
-  or
-  run.getScript().getRawScript().regexpMatch(
-    "(?is).*\\b(env|printenv)\\b.*::add-mask::.*\\$(\\{" + name + "\\}|" + name + "\\b).*"
+  exists(string reference |
+    variableReferencePattern(name, reference) and
+    (
+      run.getScript().getRawScript().regexpMatch(
+        "(?is).*(echo|printf|cat|tee|env|printenv|set\\s+-x|GITHUB_STEP_SUMMARY).*" + reference +
+          ".*::add-mask::.*" + reference + ".*"
+      )
+      or
+      run.getScript().getRawScript().regexpMatch(
+        "(?is).*\\b(env|printenv)\\b.*::add-mask::.*" + reference + ".*"
+      )
+    )
   )
 }
 
@@ -141,11 +151,11 @@ predicate environmentDumpCommand(string command, string sinkKind) {
 
 bindingset[command, name]
 predicate logVisibleCommand(string command, string name, string sinkKind) {
-  command.regexpMatch("(?is)^\\s*(echo|printf)\\b.*") and
+  command.regexpMatch("(?is).*\\b(echo|printf)\\b.*") and
   commandReferencesVariable(command, name) and
   sinkKind = "shell output"
   or
-  command.regexpMatch("(?is)^\\s*cat\\b.*") and
+  command.regexpMatch("(?is).*\\bcat\\b.*") and
   commandReferencesVariable(command, name) and
   sinkKind = "cat output"
   or
