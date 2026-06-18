@@ -476,6 +476,15 @@ fn audit_tool_only_ui_metadata(
 
     let visibility_path = format!("{meta_path}/ui/visibility");
     match meta.pointer("/ui/visibility") {
+        Some(value) if !is_valid_visibility(value) => findings.push(finding(
+            ToolSchemaCompatibilitySeverity::Error,
+            "ui_visibility_invalid",
+            tool_name,
+            &visibility_path,
+            "Tool-only descriptor UI visibility is not a valid visibility string or array of visibility strings.",
+            TOOL_ONLY_UI_HINT,
+            Some(value.clone()),
+        )),
         Some(value) if includes_model_visibility(value) => {
             if includes_app_visibility(value) {
                 findings.push(finding(
@@ -540,7 +549,17 @@ fn audit_apps_sdk_ui_metadata(
 
     let visibility_path = format!("{meta_path}/ui/visibility");
     if let Some(value) = meta.pointer("/ui/visibility") {
-        if !includes_app_visibility(value) {
+        if !is_valid_visibility(value) {
+            findings.push(finding(
+                ToolSchemaCompatibilitySeverity::Error,
+                "ui_visibility_invalid",
+                tool_name,
+                &visibility_path,
+                "Apps SDK UI descriptor visibility is not a valid visibility string or array of visibility strings.",
+                APPS_SDK_UI_HINT,
+                Some(value.clone()),
+            ));
+        } else if !includes_app_visibility(value) {
             findings.push(finding(
                 ToolSchemaCompatibilitySeverity::Error,
                 "ui_visibility_excludes_app",
@@ -570,6 +589,23 @@ fn visibility_contains(value: &Value, predicate: fn(&str) -> bool) -> bool {
             .any(|value| value.as_str().map(predicate).unwrap_or(false)),
         _ => false,
     }
+}
+
+fn is_valid_visibility(value: &Value) -> bool {
+    match value {
+        Value::String(value) => is_visibility_value(value),
+        Value::Array(values) if !values.is_empty() => values.iter().all(|value| {
+            value
+                .as_str()
+                .map(is_visibility_value)
+                .unwrap_or(false)
+        }),
+        _ => false,
+    }
+}
+
+fn is_visibility_value(value: &str) -> bool {
+    is_model_visibility_value(value) || is_app_visibility_value(value)
 }
 
 fn is_model_visibility_value(value: &str) -> bool {
@@ -1124,6 +1160,41 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_tool_profile_rejects_invalid_visibility_value() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.insert(
+            "ui".to_string(),
+            json!({
+                "visibility": ["model", "modle"]
+            }),
+        );
+
+        let findings = audit_tool_schema_compatibility_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::ChatgptTool,
+        );
+
+        assert_eq!(
+            serde_json::to_value(findings).expect("serialize findings"),
+            json!([{
+                "severity": "error",
+                "code": "ui_visibility_invalid",
+                "tool_name": "work_items_read",
+                "schema_path": "/tools/0/_meta/ui/visibility",
+                "message": "Tool-only descriptor UI visibility is not a valid visibility string or array of visibility strings.",
+                "hint": TOOL_ONLY_UI_HINT,
+                "fragment": ["model", "modle"]
+            }])
+        );
+    }
+
+    #[test]
     fn apps_sdk_ui_profile_requires_a_ui_template() {
         let findings = audit_tool_schema_compatibility_for_profile(
             &json!({
@@ -1234,6 +1305,43 @@ mod tests {
                 "message": "Apps SDK UI descriptor visibility excludes the app.",
                 "hint": APPS_SDK_UI_HINT,
                 "fragment": ["model"]
+            }])
+        );
+    }
+
+    #[test]
+    fn apps_sdk_ui_profile_rejects_invalid_visibility_type() {
+        let mut descriptor = chatgpt_tool_descriptor();
+        let meta = descriptor
+            .get_mut("_meta")
+            .and_then(Value::as_object_mut)
+            .expect("_meta object");
+        meta.remove("openai/widgetAccessible");
+        meta.insert(
+            "ui".to_string(),
+            json!({
+                "resourceUri": "ui://widget/work-items.html",
+                "visibility": ["app", 12]
+            }),
+        );
+
+        let findings = audit_tool_schema_compatibility_for_profile(
+            &json!({
+                "tools": [descriptor]
+            }),
+            ToolDescriptorProfile::AppsSdkUi,
+        );
+
+        assert_eq!(
+            serde_json::to_value(findings).expect("serialize findings"),
+            json!([{
+                "severity": "error",
+                "code": "ui_visibility_invalid",
+                "tool_name": "work_items_read",
+                "schema_path": "/tools/0/_meta/ui/visibility",
+                "message": "Apps SDK UI descriptor visibility is not a valid visibility string or array of visibility strings.",
+                "hint": APPS_SDK_UI_HINT,
+                "fragment": ["app", 12]
             }])
         );
     }
