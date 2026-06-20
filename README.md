@@ -9,7 +9,9 @@ diagnostic reports, and CI-friendly compatibility evidence.
 - Transport connectivity over stdio and streamable HTTP.
 - OAuth protected-resource and authorization-server discovery.
 - MCP initialize, ping, tools, resources, and prompts surfaces.
-- Paginated `tools/list` handling and complete tool schema compatibility.
+- Paginated `tools/list`, `resources/list`, `resources/templates/list`, and
+  `prompts/list` handling.
+- Complete tool schema compatibility.
 - ChatGPT connector descriptor profiles for tool-only and Apps SDK UI surfaces.
 - Prompt rendering, resource read/subscribe flows, raw requests, and tool calls.
 - Last-Event-ID replay behavior for streamable HTTP sessions.
@@ -55,6 +57,22 @@ mcp-probe run \
 
 The `apps_sdk_ui` profile accepts the standard `_meta.ui.resourceUri` template
 link and the ChatGPT compatibility alias `_meta["openai/outputTemplate"]`.
+
+Capture a full catalog evidence artifact:
+
+```bash
+mcp-probe run \
+  --transport streamable-http \
+  --url http://127.0.0.1:8000/mcp \
+  --verbosity full
+```
+
+Full probe reports include a redacted `catalog` artifact with server metadata,
+capabilities, tools, resources, resource templates, prompts, method status,
+page counts, and item counts. Summary output keeps the method/count receipt and
+omits large raw catalog payloads. The catalog artifact applies the probe's
+default key and telemetry-text redaction so tokens and common secret-like
+strings are masked before the artifact is shared.
 
 Render a prompt:
 

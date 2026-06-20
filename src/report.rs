@@ -4,6 +4,10 @@ use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use mcp_toolkit_observability::redaction::{
+    redact_json_keys, redact_telemetry_text, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE,
+};
+
 /// Status for a probe step.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -56,6 +60,58 @@ pub struct TraceEntry {
     pub id: Option<Value>,
 }
 
+/// Summary of one catalog discovery method in a shareable catalog artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogMethodSummary {
+    pub method: String,
+    pub status: ProbeStepStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<usize>,
+}
+
+/// Redaction policy metadata for a shareable catalog artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct CatalogRedaction {
+    pub state: String,
+    pub policy: String,
+}
+
+/// MCP catalog evidence suitable for Ops work-item receipts.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogArtifact {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub redaction: CatalogRedaction,
+    pub methods: Vec<CatalogMethodSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_info: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_templates: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompts: Option<Value>,
+}
+
+/// Raw discovery payload references used to build a redacted catalog artifact.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CatalogPayloadRefs<'a> {
+    pub server_info: Option<&'a Value>,
+    pub capabilities: Option<&'a Value>,
+    pub tools: Option<&'a Value>,
+    pub resources: Option<&'a Value>,
+    pub resource_templates: Option<&'a Value>,
+    pub prompts: Option<&'a Value>,
+}
+
 /// Auth discovery metadata captured from PRM/OAuth endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuthDiscovery {
@@ -91,7 +147,11 @@ pub struct ProbeReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_templates: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompts: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<CatalogArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace: Option<Vec<TraceEntry>>,
 }
@@ -158,6 +218,86 @@ pub fn now_iso() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn redact_strings(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(redact_prefixed_tokens(&redact_telemetry_text(&text))),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_strings).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, redact_strings(value)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn redact_prefixed_tokens(text: &str) -> String {
+    const SENSITIVE_PREFIXES: &[&str] = &["sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "ya29."];
+
+    let mut redacted = String::with_capacity(text.len());
+    let mut offset = 0usize;
+
+    while offset < text.len() {
+        let remaining = &text[offset..];
+        if let Some(prefix) = SENSITIVE_PREFIXES
+            .iter()
+            .find(|prefix| remaining.starts_with(**prefix))
+        {
+            redacted.push_str(DEFAULT_REDACT_VALUE);
+            offset += prefix.len();
+            while offset < text.len() {
+                let next = text[offset..]
+                    .chars()
+                    .next()
+                    .expect("offset is within string bounds");
+                if next.is_ascii_alphanumeric() || matches!(next, '-' | '_' | '.') {
+                    offset += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        } else {
+            let next = remaining
+                .chars()
+                .next()
+                .expect("remaining string is non-empty");
+            redacted.push(next);
+            offset += next.len_utf8();
+        }
+    }
+
+    redacted
+}
+
+fn redact_catalog_value(value: Option<&Value>) -> Option<Value> {
+    let mut value = value.cloned()?;
+    redact_json_keys(&mut value, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE);
+    Some(redact_strings(value))
+}
+
+/// Build a redacted catalog artifact from raw probe discovery payloads.
+pub fn build_catalog_artifact(
+    generated_at: String,
+    methods: Vec<CatalogMethodSummary>,
+    payloads: CatalogPayloadRefs<'_>,
+) -> CatalogArtifact {
+    CatalogArtifact {
+        schema_version: 1,
+        generated_at,
+        redaction: CatalogRedaction {
+            state: "redacted".to_string(),
+            policy: "mcp-probe default key and telemetry-text redaction".to_string(),
+        },
+        methods,
+        server_info: redact_catalog_value(payloads.server_info),
+        capabilities: redact_catalog_value(payloads.capabilities),
+        tools: redact_catalog_value(payloads.tools),
+        resources: redact_catalog_value(payloads.resources),
+        resource_templates: redact_catalog_value(payloads.resource_templates),
+        prompts: redact_catalog_value(payloads.prompts),
+    }
+}
+
 fn summarize_auth(auth: Option<AuthDiscovery>) -> Option<AuthDiscovery> {
     let auth = auth?;
     let mut summary = AuthDiscovery {
@@ -191,6 +331,18 @@ fn summarize_auth(auth: Option<AuthDiscovery>) -> Option<AuthDiscovery> {
     }
 }
 
+fn summarize_catalog(catalog: Option<CatalogArtifact>) -> Option<CatalogArtifact> {
+    catalog.map(|mut catalog| {
+        catalog.server_info = None;
+        catalog.capabilities = None;
+        catalog.tools = None;
+        catalog.resources = None;
+        catalog.resource_templates = None;
+        catalog.prompts = None;
+        catalog
+    })
+}
+
 /// Apply report verbosity by trimming large payloads when in summary mode.
 pub fn apply_report_verbosity(
     mut report: ProbeReport,
@@ -201,10 +353,59 @@ pub fn apply_report_verbosity(
         _ => {
             report.tools = None;
             report.resources = None;
+            report.resource_templates = None;
             report.prompts = None;
             report.trace = None;
             report.auth = summarize_auth(report.auth);
+            report.catalog = summarize_catalog(report.catalog);
             report
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_artifact_redacts_and_summarizes() {
+        let server_info = json!({"name": "server"});
+        let capabilities = json!({"tools": {}});
+        let tools = json!({
+            "tools": [{
+                "name": "secret_tool",
+                "_meta": {
+                    "authorization": "Bearer should-not-survive",
+                    "description": "call with token sk-live-secret"
+                }
+            }]
+        });
+
+        let artifact = build_catalog_artifact(
+            "2026-06-20T00:00:00Z".to_string(),
+            vec![CatalogMethodSummary {
+                method: "tools/list".to_string(),
+                status: ProbeStepStatus::Ok,
+                detail: None,
+                page_count: Some(2),
+                item_count: Some(3),
+            }],
+            CatalogPayloadRefs {
+                server_info: Some(&server_info),
+                capabilities: Some(&capabilities),
+                tools: Some(&tools),
+                ..CatalogPayloadRefs::default()
+            },
+        );
+
+        let rendered = serde_json::to_string(&artifact).expect("serialize artifact");
+        assert!(!rendered.contains("Bearer should-not-survive"));
+        assert!(!rendered.contains("sk-live-secret"));
+        assert_eq!(artifact.methods[0].page_count, Some(2));
+
+        let summarized = summarize_catalog(Some(artifact)).expect("summary artifact");
+        assert!(summarized.tools.is_none());
+        assert_eq!(summarized.methods[0].item_count, Some(3));
     }
 }

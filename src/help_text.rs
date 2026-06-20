@@ -210,7 +210,7 @@ const NOTES: &[&str] = &[
     "- use_auth: true uses a cached token if the probe server has one configured for the target URL.",
     "- *_token_path options read a token JSON file; paths are restricted to the probe server token directory for safety.",
     "- refresh_token auth: token_endpoint is discovered from server_url if omitted.",
-    "- verbosity: summary (default) omits tools/resources/prompts; full returns full report payloads; legacy `normal` is unsupported (use `summary`).",
+    "- verbosity: summary (default) omits tools/resources/resource_templates/prompts raw payloads; full returns full report payloads and the redacted catalog artifact.",
     "- descriptor_profile: basic (default) checks generic input schemas; chatgpt_tool also checks tool-only ChatGPT connector metadata; apps_sdk_ui requires at least one UI template descriptor.",
     "- trace: true captures JSON-RPC traffic (may be large).",
     "- stdio cwd/env: set cwd or env for stdio transports when probing monorepos.",

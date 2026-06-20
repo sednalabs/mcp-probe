@@ -1095,7 +1095,16 @@ fn strip_raw(mut report: ProbeReport, include_raw: bool) -> ProbeReport {
     report.capabilities = None;
     report.tools = None;
     report.resources = None;
+    report.resource_templates = None;
     report.prompts = None;
+    if let Some(catalog) = report.catalog.as_mut() {
+        catalog.server_info = None;
+        catalog.capabilities = None;
+        catalog.tools = None;
+        catalog.resources = None;
+        catalog.resource_templates = None;
+        catalog.prompts = None;
+    }
     report.trace = None;
     report
 }
@@ -1116,7 +1125,9 @@ fn build_error_report(message: &str) -> ProbeReport {
         capabilities: None,
         tools: None,
         resources: None,
+        resource_templates: None,
         prompts: None,
+        catalog: None,
         trace: None,
     }
 }

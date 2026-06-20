@@ -21,13 +21,16 @@ use crate::probe::schema_compat::{
     build_tool_schema_compatibility_step_for_profile, ToolDescriptorProfile,
 };
 use crate::report::{
-    now_iso, AuthDiscovery, HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus,
-    RawRequestReport, TraceEntry,
+    build_catalog_artifact, now_iso, AuthDiscovery, CatalogMethodSummary, CatalogPayloadRefs,
+    HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus, RawRequestReport, TraceEntry,
 };
 use crate::transport::TransportType;
 use anyhow::anyhow;
 use mcp_toolkit_core::rmcp_models;
-use rmcp::model::{ClientRequest, CustomRequest, ListToolsResult, PingRequest};
+use rmcp::model::{
+    ClientRequest, CustomRequest, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PingRequest,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -37,7 +40,7 @@ use std::collections::HashMap;
 pub const DEFAULT_CLIENT_NAME: &str = "mcp-toolkit";
 /// Default client version used for probe connections.
 pub const DEFAULT_CLIENT_VERSION: &str = "0.0.0";
-const MAX_TOOLS_LIST_PAGES: usize = 64;
+const MAX_DISCOVERY_LIST_PAGES: usize = 64;
 
 /// Probe target configuration for connection-based checks.
 #[derive(Debug, Clone)]
@@ -325,6 +328,24 @@ struct ToolListPages {
     tool_names: Vec<String>,
 }
 
+struct ResourceListPages {
+    result: ListResourcesResult,
+    page_count: usize,
+    resource_uris: Vec<String>,
+}
+
+struct ResourceTemplateListPages {
+    result: ListResourceTemplatesResult,
+    page_count: usize,
+    resource_template_uris: Vec<String>,
+}
+
+struct PromptListPages {
+    result: ListPromptsResult,
+    page_count: usize,
+    prompt_names: Vec<String>,
+}
+
 async fn list_all_tool_pages(
     connection: &ProbeConnection,
     probe_options: &options::ProbeOptions,
@@ -387,9 +408,9 @@ async fn list_all_tool_pages(
         else {
             break;
         };
-        if page_count >= MAX_TOOLS_LIST_PAGES {
+        if page_count >= MAX_DISCOVERY_LIST_PAGES {
             return Err(anyhow!(
-                "tools/list pagination exceeded {MAX_TOOLS_LIST_PAGES} pages without reaching the end"
+                "tools/list pagination exceeded {MAX_DISCOVERY_LIST_PAGES} pages without reaching the end"
             ));
         }
         cursor = Some(next_cursor);
@@ -403,6 +424,245 @@ async fn list_all_tool_pages(
         },
         page_count,
         tool_names,
+    })
+}
+
+async fn list_all_resource_pages(
+    connection: &ProbeConnection,
+    probe_options: &options::ProbeOptions,
+    logger: &mut Option<Logger>,
+) -> anyhow::Result<ResourceListPages> {
+    let mut cursor: Option<String> = None;
+    let mut resources = Vec::new();
+    let mut resource_uris = Vec::new();
+    let mut page_count = 0usize;
+
+    loop {
+        let cursor_for_request = cursor.clone();
+        let result =
+            timing::with_retry(
+                || {
+                    timing::with_timeout(
+                        connection.service.list_resources(Some(
+                            rmcp_models::paginated_request_params(cursor_for_request.clone()),
+                        )),
+                        probe_options.timeout_ms,
+                        "resources.list",
+                    )
+                },
+                probe_options.retries,
+                probe_options.retry_delay_ms,
+            )
+            .await?;
+
+        page_count += 1;
+        let page_resource_uris: Vec<String> = result
+            .resources
+            .iter()
+            .map(|resource| resource.uri.clone())
+            .collect();
+        if let Some(logger) = logger.as_mut() {
+            logger.info(
+                "probe.resources.list.page.ok",
+                Some(json!({
+                    "page": page_count,
+                    "count": page_resource_uris.len(),
+                    "next_cursor_present": result
+                        .next_cursor
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()),
+                    "resource_uris": page_resource_uris,
+                })),
+            );
+        }
+
+        resource_uris.extend(page_resource_uris.clone());
+        resources.extend(result.resources);
+
+        let Some(next_cursor) = result
+            .next_cursor
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            break;
+        };
+        if page_count >= MAX_DISCOVERY_LIST_PAGES {
+            return Err(anyhow!(
+                "resources/list pagination exceeded {MAX_DISCOVERY_LIST_PAGES} pages without reaching the end"
+            ));
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(ResourceListPages {
+        result: ListResourcesResult {
+            meta: None,
+            resources,
+            next_cursor: None,
+        },
+        page_count,
+        resource_uris,
+    })
+}
+
+async fn list_all_resource_template_pages(
+    connection: &ProbeConnection,
+    probe_options: &options::ProbeOptions,
+    logger: &mut Option<Logger>,
+) -> anyhow::Result<ResourceTemplateListPages> {
+    let mut cursor: Option<String> = None;
+    let mut resource_templates = Vec::new();
+    let mut resource_template_uris = Vec::new();
+    let mut page_count = 0usize;
+
+    loop {
+        let cursor_for_request = cursor.clone();
+        let result = timing::with_retry(
+            || {
+                timing::with_timeout(
+                    connection.service.list_resource_templates(Some(
+                        rmcp_models::paginated_request_params(cursor_for_request.clone()),
+                    )),
+                    probe_options.timeout_ms,
+                    "resources.templates.list",
+                )
+            },
+            probe_options.retries,
+            probe_options.retry_delay_ms,
+        )
+        .await?;
+
+        page_count += 1;
+        let page_template_uris: Vec<String> = result
+            .resource_templates
+            .iter()
+            .map(|template| template.uri_template.clone())
+            .collect();
+        if let Some(logger) = logger.as_mut() {
+            logger.info(
+                "probe.resource_templates.list.page.ok",
+                Some(json!({
+                    "page": page_count,
+                    "count": page_template_uris.len(),
+                    "next_cursor_present": result
+                        .next_cursor
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()),
+                    "resource_template_uris": page_template_uris,
+                })),
+            );
+        }
+
+        resource_template_uris.extend(page_template_uris.clone());
+        resource_templates.extend(result.resource_templates);
+
+        let Some(next_cursor) = result
+            .next_cursor
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            break;
+        };
+        if page_count >= MAX_DISCOVERY_LIST_PAGES {
+            return Err(anyhow!(
+                "resources/templates/list pagination exceeded {MAX_DISCOVERY_LIST_PAGES} pages without reaching the end"
+            ));
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(ResourceTemplateListPages {
+        result: ListResourceTemplatesResult {
+            meta: None,
+            resource_templates,
+            next_cursor: None,
+        },
+        page_count,
+        resource_template_uris,
+    })
+}
+
+async fn list_all_prompt_pages(
+    connection: &ProbeConnection,
+    probe_options: &options::ProbeOptions,
+    logger: &mut Option<Logger>,
+) -> anyhow::Result<PromptListPages> {
+    let mut cursor: Option<String> = None;
+    let mut prompts = Vec::new();
+    let mut prompt_names = Vec::new();
+    let mut page_count = 0usize;
+
+    loop {
+        let cursor_for_request = cursor.clone();
+        let result =
+            timing::with_retry(
+                || {
+                    timing::with_timeout(
+                        connection.service.list_prompts(Some(
+                            rmcp_models::paginated_request_params(cursor_for_request.clone()),
+                        )),
+                        probe_options.timeout_ms,
+                        "prompts.list",
+                    )
+                },
+                probe_options.retries,
+                probe_options.retry_delay_ms,
+            )
+            .await?;
+
+        page_count += 1;
+        let page_prompt_names: Vec<String> = result
+            .prompts
+            .iter()
+            .map(|prompt| prompt.name.clone())
+            .collect();
+        if let Some(logger) = logger.as_mut() {
+            logger.info(
+                "probe.prompts.list.page.ok",
+                Some(json!({
+                    "page": page_count,
+                    "count": page_prompt_names.len(),
+                    "next_cursor_present": result
+                        .next_cursor
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()),
+                    "prompt_names": page_prompt_names,
+                })),
+            );
+        }
+
+        prompt_names.extend(page_prompt_names.clone());
+        prompts.extend(result.prompts);
+
+        let Some(next_cursor) = result
+            .next_cursor
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            break;
+        };
+        if page_count >= MAX_DISCOVERY_LIST_PAGES {
+            return Err(anyhow!(
+                "prompts/list pagination exceeded {MAX_DISCOVERY_LIST_PAGES} pages without reaching the end"
+            ));
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(PromptListPages {
+        result: ListPromptsResult {
+            meta: None,
+            prompts,
+            next_cursor: None,
+        },
+        page_count,
+        prompt_names,
     })
 }
 
@@ -454,7 +714,9 @@ pub async fn run_probe(
             capabilities: None,
             tools: None,
             resources: None,
+            resource_templates: None,
             prompts: None,
+            catalog: None,
             trace: None,
         };
     }
@@ -516,7 +778,9 @@ pub async fn run_probe(
                     capabilities: None,
                     tools: None,
                     resources: None,
+                    resource_templates: None,
                     prompts: None,
+                    catalog: None,
                     trace: None,
                 };
             }
@@ -534,7 +798,9 @@ pub async fn run_probe(
                 capabilities: None,
                 tools: None,
                 resources: None,
+                resource_templates: None,
                 prompts: None,
+                catalog: None,
                 trace: None,
             };
         }
@@ -572,20 +838,30 @@ pub async fn run_probe(
 
     let mut tools_value: Option<Value> = None;
     let mut resources_value: Option<Value> = None;
+    let mut resource_templates_value: Option<Value> = None;
     let mut prompts_value: Option<Value> = None;
+    let mut catalog_methods = Vec::new();
 
     let list_tools = list_all_tool_pages(&connection, &probe_options, &mut logger).await;
     match list_tools {
         Ok(result) => {
+            let detail = format!(
+                "discovered {} tools across {} page(s)",
+                result.tool_names.len(),
+                result.page_count
+            );
+            catalog_methods.push(CatalogMethodSummary {
+                method: "tools/list".to_string(),
+                status: ProbeStepStatus::Ok,
+                detail: Some(detail.clone()),
+                page_count: Some(result.page_count),
+                item_count: Some(result.tool_names.len()),
+            });
             tools_value = serde_json::to_value(result.result).ok();
             steps.push(ProbeStep {
                 name: "tools.list".to_string(),
                 status: ProbeStepStatus::Ok,
-                detail: Some(format!(
-                    "discovered {} tools across {} page(s)",
-                    result.tool_names.len(),
-                    result.page_count
-                )),
+                detail: Some(detail),
                 data: Some(json!({
                     "page_count": result.page_count,
                     "tool_count": result.tool_names.len(),
@@ -601,6 +877,13 @@ pub async fn run_probe(
         }
         Err(error) => {
             let details = describe_error(&error);
+            catalog_methods.push(CatalogMethodSummary {
+                method: "tools/list".to_string(),
+                status: ProbeStepStatus::Error,
+                detail: Some(details.message.clone()),
+                page_count: None,
+                item_count: None,
+            });
             steps.push(ProbeStep {
                 name: "tools.list".to_string(),
                 status: ProbeStepStatus::Error,
@@ -624,35 +907,49 @@ pub async fn run_probe(
         .and_then(|info| info.capabilities.resources.as_ref())
         .is_some();
     if resources_supported {
-        let list_resources = timing::with_retry(
-            || {
-                timing::with_timeout(
-                    connection
-                        .service
-                        .list_resources(Some(rmcp_models::paginated_request_params(None))),
-                    probe_options.timeout_ms,
-                    "resources.list",
-                )
-            },
-            probe_options.retries,
-            probe_options.retry_delay_ms,
-        )
-        .await;
+        let list_resources =
+            list_all_resource_pages(&connection, &probe_options, &mut logger).await;
         match list_resources {
             Ok(result) => {
-                resources_value = serde_json::to_value(result).ok();
+                let detail = format!(
+                    "discovered {} resources across {} page(s)",
+                    result.resource_uris.len(),
+                    result.page_count
+                );
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "resources/list".to_string(),
+                    status: ProbeStepStatus::Ok,
+                    detail: Some(detail.clone()),
+                    page_count: Some(result.page_count),
+                    item_count: Some(result.resource_uris.len()),
+                });
+                resources_value = serde_json::to_value(result.result).ok();
                 steps.push(ProbeStep {
                     name: "resources.list".to_string(),
                     status: ProbeStepStatus::Ok,
-                    detail: None,
-                    data: None,
+                    detail: Some(detail),
+                    data: Some(json!({
+                        "page_count": result.page_count,
+                        "resource_count": result.resource_uris.len(),
+                        "resource_uris": result.resource_uris,
+                    })),
                 });
                 if let Some(logger) = logger.as_mut() {
-                    logger.info("probe.resources.list.ok", None);
+                    logger.info(
+                        "probe.resources.list.ok",
+                        steps.last().and_then(|step| step.data.clone()),
+                    );
                 }
             }
             Err(error) => {
                 let details = describe_error(&error);
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "resources/list".to_string(),
+                    status: ProbeStepStatus::Error,
+                    detail: Some(details.message.clone()),
+                    page_count: None,
+                    item_count: None,
+                });
                 steps.push(ProbeStep {
                     name: "resources.list".to_string(),
                     status: ProbeStepStatus::Error,
@@ -664,9 +961,83 @@ pub async fn run_probe(
                 }
             }
         }
+        let list_resource_templates =
+            list_all_resource_template_pages(&connection, &probe_options, &mut logger).await;
+        match list_resource_templates {
+            Ok(result) => {
+                let detail = format!(
+                    "discovered {} resource templates across {} page(s)",
+                    result.resource_template_uris.len(),
+                    result.page_count
+                );
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "resources/templates/list".to_string(),
+                    status: ProbeStepStatus::Ok,
+                    detail: Some(detail.clone()),
+                    page_count: Some(result.page_count),
+                    item_count: Some(result.resource_template_uris.len()),
+                });
+                resource_templates_value = serde_json::to_value(result.result).ok();
+                steps.push(ProbeStep {
+                    name: "resources.templates.list".to_string(),
+                    status: ProbeStepStatus::Ok,
+                    detail: Some(detail),
+                    data: Some(json!({
+                        "page_count": result.page_count,
+                        "resource_template_count": result.resource_template_uris.len(),
+                        "resource_template_uris": result.resource_template_uris,
+                    })),
+                });
+                if let Some(logger) = logger.as_mut() {
+                    logger.info(
+                        "probe.resource_templates.list.ok",
+                        steps.last().and_then(|step| step.data.clone()),
+                    );
+                }
+            }
+            Err(error) => {
+                let details = describe_error(&error);
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "resources/templates/list".to_string(),
+                    status: ProbeStepStatus::Error,
+                    detail: Some(details.message.clone()),
+                    page_count: None,
+                    item_count: None,
+                });
+                steps.push(ProbeStep {
+                    name: "resources.templates.list".to_string(),
+                    status: ProbeStepStatus::Error,
+                    detail: Some(details.message.clone()),
+                    data: error_data(&details),
+                });
+                if let Some(logger) = logger.as_mut() {
+                    logger.error("probe.resource_templates.list.error", None);
+                }
+            }
+        }
     } else {
+        catalog_methods.push(CatalogMethodSummary {
+            method: "resources/list".to_string(),
+            status: ProbeStepStatus::Ok,
+            detail: Some("not supported".to_string()),
+            page_count: None,
+            item_count: None,
+        });
+        catalog_methods.push(CatalogMethodSummary {
+            method: "resources/templates/list".to_string(),
+            status: ProbeStepStatus::Ok,
+            detail: Some("not supported".to_string()),
+            page_count: None,
+            item_count: None,
+        });
         steps.push(ProbeStep {
             name: "resources.list".to_string(),
+            status: ProbeStepStatus::Ok,
+            detail: Some("not supported".to_string()),
+            data: None,
+        });
+        steps.push(ProbeStep {
+            name: "resources.templates.list".to_string(),
             status: ProbeStepStatus::Ok,
             detail: Some("not supported".to_string()),
             data: None,
@@ -678,35 +1049,48 @@ pub async fn run_probe(
         .and_then(|info| info.capabilities.prompts.as_ref())
         .is_some();
     if prompts_supported {
-        let list_prompts = timing::with_retry(
-            || {
-                timing::with_timeout(
-                    connection
-                        .service
-                        .list_prompts(Some(rmcp_models::paginated_request_params(None))),
-                    probe_options.timeout_ms,
-                    "prompts.list",
-                )
-            },
-            probe_options.retries,
-            probe_options.retry_delay_ms,
-        )
-        .await;
+        let list_prompts = list_all_prompt_pages(&connection, &probe_options, &mut logger).await;
         match list_prompts {
             Ok(result) => {
-                prompts_value = serde_json::to_value(result).ok();
+                let detail = format!(
+                    "discovered {} prompts across {} page(s)",
+                    result.prompt_names.len(),
+                    result.page_count
+                );
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "prompts/list".to_string(),
+                    status: ProbeStepStatus::Ok,
+                    detail: Some(detail.clone()),
+                    page_count: Some(result.page_count),
+                    item_count: Some(result.prompt_names.len()),
+                });
+                prompts_value = serde_json::to_value(result.result).ok();
                 steps.push(ProbeStep {
                     name: "prompts.list".to_string(),
                     status: ProbeStepStatus::Ok,
-                    detail: None,
-                    data: None,
+                    detail: Some(detail),
+                    data: Some(json!({
+                        "page_count": result.page_count,
+                        "prompt_count": result.prompt_names.len(),
+                        "prompt_names": result.prompt_names,
+                    })),
                 });
                 if let Some(logger) = logger.as_mut() {
-                    logger.info("probe.prompts.list.ok", None);
+                    logger.info(
+                        "probe.prompts.list.ok",
+                        steps.last().and_then(|step| step.data.clone()),
+                    );
                 }
             }
             Err(error) => {
                 let details = describe_error(&error);
+                catalog_methods.push(CatalogMethodSummary {
+                    method: "prompts/list".to_string(),
+                    status: ProbeStepStatus::Error,
+                    detail: Some(details.message.clone()),
+                    page_count: None,
+                    item_count: None,
+                });
                 steps.push(ProbeStep {
                     name: "prompts.list".to_string(),
                     status: ProbeStepStatus::Error,
@@ -719,6 +1103,13 @@ pub async fn run_probe(
             }
         }
     } else {
+        catalog_methods.push(CatalogMethodSummary {
+            method: "prompts/list".to_string(),
+            status: ProbeStepStatus::Ok,
+            detail: Some("not supported".to_string()),
+            page_count: None,
+            item_count: None,
+        });
         steps.push(ProbeStep {
             name: "prompts.list".to_string(),
             status: ProbeStepStatus::Ok,
@@ -777,17 +1168,32 @@ pub async fn run_probe(
     if let Some(logger) = logger.as_mut() {
         logger.info("probe.finished", Some(Value::Bool(ok)));
     }
+    let finished_at = now_iso();
+    let catalog = Some(build_catalog_artifact(
+        finished_at.clone(),
+        catalog_methods,
+        CatalogPayloadRefs {
+            server_info: server_info_value.as_ref(),
+            capabilities: capabilities_value.as_ref(),
+            tools: tools_value.as_ref(),
+            resources: resources_value.as_ref(),
+            resource_templates: resource_templates_value.as_ref(),
+            prompts: prompts_value.as_ref(),
+        },
+    ));
     ProbeReport {
         ok,
         started_at,
-        finished_at: now_iso(),
+        finished_at,
         steps,
         auth,
         server_info: server_info_value,
         capabilities: capabilities_value,
         tools: tools_value,
         resources: resources_value,
+        resource_templates: resource_templates_value,
         prompts: prompts_value,
+        catalog,
         trace: trace_entries,
     }
 }
@@ -840,7 +1246,9 @@ pub async fn run_probe_handshake(
             capabilities: None,
             tools: None,
             resources: None,
+            resource_templates: None,
             prompts: None,
+            catalog: None,
             trace: None,
         };
     }
@@ -902,7 +1310,9 @@ pub async fn run_probe_handshake(
                     capabilities: None,
                     tools: None,
                     resources: None,
+                    resource_templates: None,
                     prompts: None,
+                    catalog: None,
                     trace: None,
                 };
             }
@@ -920,7 +1330,9 @@ pub async fn run_probe_handshake(
                 capabilities: None,
                 tools: None,
                 resources: None,
+                resource_templates: None,
                 prompts: None,
+                catalog: None,
                 trace: None,
             };
         }
@@ -1076,7 +1488,9 @@ pub async fn run_probe_handshake(
         capabilities: capabilities_value,
         tools: tools_value,
         resources: None,
+        resource_templates: None,
         prompts: None,
+        catalog: None,
         trace: trace_entries,
     }
 }
