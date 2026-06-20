@@ -11,8 +11,8 @@ use crate::probe::{
     HttpSmokeTarget, ProbeTarget, RawRequestTarget,
 };
 use crate::report::{
-    apply_report_verbosity, now_iso, ProbeReport, ProbeStep, ProbeStepStatus, RawRequestReport,
-    ReportVerbosity,
+    apply_report_verbosity, now_iso, CatalogProfile, ProbeReport, ProbeStep, ProbeStepStatus,
+    RawRequestReport, ReportVerbosity,
 };
 use crate::scenario::runner::run_script_scenario;
 use crate::scenario::types::ScriptScenario;
@@ -59,6 +59,8 @@ Options:
   --trace-max-bytes <value> Max bytes per trace message (default: 4096).
   --descriptor-profile <value>
                            Tool descriptor audit profile (basic|chatgpt_tool|apps_sdk_ui).
+  --catalog-profile <value>
+                           Host catalog profile (raw_mcp|chatgpt_tool|apps_sdk_ui|codex_deferred|claude_code|gemini_cli).
   --prompt <name>           Prompt name for prompt-render.
   --prompt-arg <k=json>     Repeatable prompt-render argument.
   --arguments-json <json>   Prompt-render arguments object.
@@ -111,6 +113,7 @@ struct ProbeTargetOverrides {
     trace_limit: Option<usize>,
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
+    catalog_profile: Option<CatalogProfile>,
 }
 
 #[derive(Debug)]
@@ -179,6 +182,7 @@ struct ProbeTargetConfig {
     trace_limit: Option<usize>,
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
+    catalog_profile: Option<CatalogProfile>,
     use_auth: Option<bool>,
     access_token_path: Option<String>,
 }
@@ -210,6 +214,7 @@ fn map_config_to_overrides(config: &ProbeTargetConfig) -> ProbeTargetOverrides {
         trace_limit: config.trace_limit,
         trace_max_bytes: config.trace_max_bytes,
         descriptor_profile: config.descriptor_profile,
+        catalog_profile: config.catalog_profile,
     }
 }
 
@@ -285,6 +290,7 @@ async fn resolve_target(
         trace_limit: overrides.trace_limit.or(base.trace_limit),
         trace_max_bytes: overrides.trace_max_bytes.or(base.trace_max_bytes),
         descriptor_profile: overrides.descriptor_profile.or(base.descriptor_profile),
+        catalog_profile: overrides.catalog_profile.or(base.catalog_profile),
     };
 
     validate_target(&target)?;
@@ -669,6 +675,7 @@ fn option_consumes_value(option: &str) -> bool {
             | "--trace-limit"
             | "--trace-max-bytes"
             | "--descriptor-profile"
+            | "--catalog-profile"
             | "--verbosity"
             | "--cwd"
             | "--env"
@@ -709,6 +716,7 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
     let mut trace_limit: Option<usize> = None;
     let mut trace_max_bytes: Option<usize> = None;
     let mut descriptor_profile: Option<ToolDescriptorProfile> = None;
+    let mut catalog_profile: Option<CatalogProfile> = None;
     let mut verbosity: Option<ReportVerbosity> = None;
     let mut cwd: Option<String> = None;
     let mut env: HashMap<String, String> = HashMap::new();
@@ -922,6 +930,17 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
                 })?);
                 i += 1;
             }
+            "--catalog-profile" => {
+                let value = args.get(i + 1).cloned().ok_or_else(|| ParseError {
+                    error: "Missing value for --catalog-profile".to_string(),
+                    help: false,
+                })?;
+                catalog_profile = Some(value.parse().map_err(|err: String| ParseError {
+                    error: err,
+                    help: false,
+                })?);
+                i += 1;
+            }
             "--verbosity" => {
                 let value = args.get(i + 1).cloned().ok_or_else(|| ParseError {
                     error: "Missing value for --verbosity".to_string(),
@@ -1003,12 +1022,13 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
             || trace_limit.is_some()
             || trace_max_bytes.is_some()
             || descriptor_profile.is_some()
+            || catalog_profile.is_some()
             || verbosity.is_some()
             || cwd.is_some()
             || !env.is_empty();
         if has_conflicts {
             return Err(ParseError {
-                error: "Do not mix --script with transport/command/url/header/cwd/env/config/profile/auth/trace/descriptor/verbosity options.".to_string(),
+                error: "Do not mix --script with transport/command/url/header/cwd/env/config/profile/auth/trace/descriptor/catalog/verbosity options.".to_string(),
                 help: false,
             });
         }
@@ -1061,6 +1081,7 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
         trace_limit,
         trace_max_bytes,
         descriptor_profile,
+        catalog_profile,
     };
 
     Ok(ParsedArgs {

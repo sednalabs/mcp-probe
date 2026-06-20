@@ -80,6 +80,72 @@ pub struct CatalogRedaction {
     pub policy: String,
 }
 
+/// Host/client catalog-discovery profile applied to a probe run.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogProfile {
+    RawMcp,
+    ChatgptTool,
+    AppsSdkUi,
+    CodexDeferred,
+    ClaudeCode,
+    GeminiCli,
+}
+
+impl CatalogProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RawMcp => "raw_mcp",
+            Self::ChatgptTool => "chatgpt_tool",
+            Self::AppsSdkUi => "apps_sdk_ui",
+            Self::CodexDeferred => "codex_deferred",
+            Self::ClaudeCode => "claude_code",
+            Self::GeminiCli => "gemini_cli",
+        }
+    }
+}
+
+impl std::str::FromStr for CatalogProfile {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "raw_mcp" | "raw-mcp" => Ok(Self::RawMcp),
+            "chatgpt_tool" | "chatgpt-tool" => Ok(Self::ChatgptTool),
+            "apps_sdk_ui" | "apps-sdk-ui" => Ok(Self::AppsSdkUi),
+            "codex_deferred" | "codex-deferred" => Ok(Self::CodexDeferred),
+            "claude_code" | "claude-code" => Ok(Self::ClaudeCode),
+            "gemini_cli" | "gemini-cli" => Ok(Self::GeminiCli),
+            _ => Err(format!(
+                "Invalid catalog profile `{value}`. Expected one of: raw_mcp, chatgpt_tool, apps_sdk_ui, codex_deferred, claude_code, gemini_cli."
+            )),
+        }
+    }
+}
+
+/// One required or optional catalog-profile assertion.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogProfileRequirement {
+    pub name: String,
+    pub required: bool,
+    pub status: ProbeStepStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<usize>,
+}
+
+/// Host-profile verdict derived from the catalog discovery methods.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogProfileVerdict {
+    pub profile: CatalogProfile,
+    pub status: ProbeStepStatus,
+    pub detail: String,
+    pub requirements: Vec<CatalogProfileRequirement>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub findings: Vec<String>,
+}
+
 /// MCP catalog evidence suitable for Ops work-item receipts.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CatalogArtifact {
@@ -87,6 +153,8 @@ pub struct CatalogArtifact {
     pub generated_at: String,
     pub redaction: CatalogRedaction,
     pub methods: Vec<CatalogMethodSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<CatalogProfileVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_info: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -279,6 +347,7 @@ fn redact_catalog_value(value: Option<&Value>) -> Option<Value> {
 pub fn build_catalog_artifact(
     generated_at: String,
     methods: Vec<CatalogMethodSummary>,
+    profile: Option<CatalogProfileVerdict>,
     payloads: CatalogPayloadRefs<'_>,
 ) -> CatalogArtifact {
     CatalogArtifact {
@@ -289,6 +358,7 @@ pub fn build_catalog_artifact(
             policy: "mcp-probe default key and telemetry-text redaction".to_string(),
         },
         methods,
+        profile,
         server_info: redact_catalog_value(payloads.server_info),
         capabilities: redact_catalog_value(payloads.capabilities),
         tools: redact_catalog_value(payloads.tools),
@@ -391,6 +461,7 @@ mod tests {
                 page_count: Some(2),
                 item_count: Some(3),
             }],
+            None,
             CatalogPayloadRefs {
                 server_info: Some(&server_info),
                 capabilities: Some(&capabilities),

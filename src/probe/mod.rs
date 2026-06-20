@@ -2,6 +2,7 @@
 
 pub mod auth_diagnostics;
 pub mod auth_discovery;
+pub mod catalog_profile;
 pub mod connect;
 pub mod errors;
 pub mod options;
@@ -15,6 +16,9 @@ use crate::allowlist::{
 use crate::logging::{stderr_logger, LogFormat, LogLevel, Logger};
 use crate::probe::auth_diagnostics::classify_stateful_session_required_response;
 use crate::probe::auth_discovery::discover_auth;
+use crate::probe::catalog_profile::{
+    build_catalog_profile_step, descriptor_profile_for_catalog_profile, evaluate_catalog_profile,
+};
 use crate::probe::connect::{connect_with_retry, ProbeConnectError, ProbeConnection};
 use crate::probe::errors::{describe_error, error_data};
 use crate::probe::schema_compat::{
@@ -22,7 +26,8 @@ use crate::probe::schema_compat::{
 };
 use crate::report::{
     build_catalog_artifact, now_iso, AuthDiscovery, CatalogMethodSummary, CatalogPayloadRefs,
-    HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus, RawRequestReport, TraceEntry,
+    CatalogProfile, HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus, RawRequestReport,
+    TraceEntry,
 };
 use crate::transport::TransportType;
 use anyhow::anyhow;
@@ -62,6 +67,7 @@ pub struct ProbeTarget {
     pub trace_limit: Option<usize>,
     pub trace_max_bytes: Option<usize>,
     pub descriptor_profile: Option<ToolDescriptorProfile>,
+    pub catalog_profile: Option<CatalogProfile>,
 }
 
 /// Target configuration for auth discovery.
@@ -898,7 +904,11 @@ pub async fn run_probe(
     push_tool_schema_compatibility_step(
         &mut steps,
         tools_value.as_ref(),
-        target.descriptor_profile,
+        target.descriptor_profile.or_else(|| {
+            target
+                .catalog_profile
+                .map(descriptor_profile_for_catalog_profile)
+        }),
         &mut logger,
     );
 
@@ -1161,6 +1171,13 @@ pub async fn run_probe(
         }
     }
 
+    let catalog_profile_verdict = target
+        .catalog_profile
+        .map(|profile| evaluate_catalog_profile(profile, &catalog_methods));
+    if let Some(verdict) = catalog_profile_verdict.as_ref() {
+        steps.push(build_catalog_profile_step(verdict));
+    }
+
     let trace_entries: Option<Vec<TraceEntry>> =
         connection.trace.map(|collector| collector.entries());
 
@@ -1172,6 +1189,7 @@ pub async fn run_probe(
     let catalog = Some(build_catalog_artifact(
         finished_at.clone(),
         catalog_methods,
+        catalog_profile_verdict,
         CatalogPayloadRefs {
             server_info: server_info_value.as_ref(),
             capabilities: capabilities_value.as_ref(),
@@ -1451,7 +1469,11 @@ pub async fn run_probe_handshake(
     push_tool_schema_compatibility_step(
         &mut steps,
         tools_value.as_ref(),
-        target.descriptor_profile,
+        target.descriptor_profile.or_else(|| {
+            target
+                .catalog_profile
+                .map(descriptor_profile_for_catalog_profile)
+        }),
         &mut logger,
     );
 
