@@ -24,7 +24,7 @@ use crate::probe::{
 };
 use crate::replay::{run_replay_probe, ReplayProbeTarget};
 use crate::report::{
-    apply_report_verbosity, AuthDiscovery, ProbeReport, ProbeStep, ProbeStepStatus,
+    apply_report_verbosity, AuthDiscovery, CatalogProfile, ProbeReport, ProbeStep, ProbeStepStatus,
     RawRequestReport, ReportVerbosity,
 };
 use crate::scenario::runner::run_script_scenario;
@@ -65,6 +65,7 @@ struct ProbeRunArgs {
     trace_limit: Option<usize>,
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
+    catalog_profile: Option<CatalogProfile>,
     use_auth: Option<bool>,
     access_token: Option<String>,
     access_token_path: Option<String>,
@@ -97,6 +98,7 @@ struct ProbeHandshakeArgs {
     trace_limit: Option<usize>,
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
+    catalog_profile: Option<CatalogProfile>,
     use_auth: Option<bool>,
     access_token: Option<String>,
     access_token_path: Option<String>,

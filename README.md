@@ -64,6 +64,7 @@ Capture a full catalog evidence artifact:
 mcp-probe run \
   --transport streamable-http \
   --url http://127.0.0.1:8000/mcp \
+  --catalog-profile codex_deferred \
   --verbosity full
 ```
 
@@ -73,6 +74,12 @@ page counts, and item counts. Summary output keeps the method/count receipt and
 omits large raw catalog payloads. The catalog artifact applies the probe's
 default key and telemetry-text redaction so tokens and common secret-like
 strings are masked before the artifact is shared.
+
+Catalog profiles add host-specific verdicts to the artifact. Available profiles
+are `raw_mcp`, `chatgpt_tool`, `apps_sdk_ui`, `codex_deferred`, `claude_code`,
+and `gemini_cli`. `chatgpt_tool` and `apps_sdk_ui` automatically apply the
+matching descriptor-profile checks when `--descriptor-profile` is not set;
+`apps_sdk_ui` also requires native resource-template discovery.
 
 Render a prompt:
 
