@@ -1,0 +1,61 @@
+name: build-binary
+
+on:
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - src/**
+      - .github/workflows/build-binary.yml
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - src/**
+      - .github/workflows/build-binary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-binary::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86_64:
+    name: Build Linux x86_64 binary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo artifacts
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage binary artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          install -m 0755 target/release/mcp-probe dist/mcp-probe-linux-x86_64
+          sha256sum dist/mcp-probe-linux-x86_64 > dist/mcp-probe-linux-x86_64.sha256
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mcp-probe-linux-x86_64
+          path: |
+            dist/mcp-probe-linux-x86_64
+            dist/mcp-probe-linux-x86_64.sha256
+          if-no-files-found: error

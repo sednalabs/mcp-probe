@@ -4,15 +4,13 @@ on:
   pull_request:
     paths:
       - ".github/codeql/**"
-      - ".github/workflows/codeql.yml"
-      - ".github/workflows/codeql-query-tests.yml"
+      - ".github/workflows/**"
   push:
     branches:
       - main
     paths:
       - ".github/codeql/**"
-      - ".github/workflows/codeql.yml"
-      - ".github/workflows/codeql-query-tests.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
