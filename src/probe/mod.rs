@@ -2,6 +2,7 @@
 
 pub mod auth_diagnostics;
 pub mod auth_discovery;
+pub mod catalog_contract;
 pub mod catalog_profile;
 pub mod connect;
 pub mod errors;
@@ -16,18 +17,20 @@ use crate::allowlist::{
 use crate::logging::{stderr_logger, LogFormat, LogLevel, Logger};
 use crate::probe::auth_diagnostics::classify_stateful_session_required_response;
 use crate::probe::auth_discovery::discover_auth;
-use crate::probe::catalog_profile::{
-    build_catalog_profile_step, descriptor_profile_for_catalog_profile, evaluate_catalog_profile,
+use crate::probe::catalog_contract::{
+    build_catalog_contract_step, effective_descriptor_profile, evaluate_catalog_contract,
+    CatalogContractSnapshot,
 };
+use crate::probe::catalog_profile::{build_catalog_profile_step, evaluate_catalog_profile};
 use crate::probe::connect::{connect_with_retry, ProbeConnectError, ProbeConnection};
 use crate::probe::errors::{describe_error, error_data};
 use crate::probe::schema_compat::{
     build_tool_schema_compatibility_step_for_profile, ToolDescriptorProfile,
 };
 use crate::report::{
-    build_catalog_artifact, now_iso, AuthDiscovery, CatalogMethodSummary, CatalogPayloadRefs,
-    CatalogProfile, HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus, RawRequestReport,
-    TraceEntry,
+    build_catalog_artifact, now_iso, AuthDiscovery, CatalogContract, CatalogMethodSummary,
+    CatalogPayloadRefs, CatalogProfile, HttpSmokeReport, ProbeReport, ProbeStep, ProbeStepStatus,
+    RawRequestReport, TraceEntry,
 };
 use crate::transport::TransportType;
 use anyhow::anyhow;
@@ -68,6 +71,7 @@ pub struct ProbeTarget {
     pub trace_max_bytes: Option<usize>,
     pub descriptor_profile: Option<ToolDescriptorProfile>,
     pub catalog_profile: Option<CatalogProfile>,
+    pub catalog_contract: Option<CatalogContract>,
 }
 
 /// Target configuration for auth discovery.
@@ -901,14 +905,12 @@ pub async fn run_probe(
             }
         }
     }
+    let descriptor_profile =
+        effective_descriptor_profile(target.descriptor_profile, target.catalog_profile);
     push_tool_schema_compatibility_step(
         &mut steps,
         tools_value.as_ref(),
-        target.descriptor_profile.or_else(|| {
-            target
-                .catalog_profile
-                .map(descriptor_profile_for_catalog_profile)
-        }),
+        Some(descriptor_profile),
         &mut logger,
     );
 
@@ -1177,6 +1179,23 @@ pub async fn run_probe(
     if let Some(verdict) = catalog_profile_verdict.as_ref() {
         steps.push(build_catalog_profile_step(verdict));
     }
+    let catalog_contract_verdict = target.catalog_contract.as_ref().map(|contract| {
+        evaluate_catalog_contract(
+            contract,
+            CatalogContractSnapshot {
+                transport: target.transport_type,
+                catalog_profile: target.catalog_profile,
+                descriptor_profile,
+                tools: tools_value.as_ref(),
+                resources: resources_value.as_ref(),
+                resource_templates: resource_templates_value.as_ref(),
+                prompts: prompts_value.as_ref(),
+            },
+        )
+    });
+    if let Some(verdict) = catalog_contract_verdict.as_ref() {
+        steps.push(build_catalog_contract_step(verdict));
+    }
 
     let trace_entries: Option<Vec<TraceEntry>> =
         connection.trace.map(|collector| collector.entries());
@@ -1190,6 +1209,7 @@ pub async fn run_probe(
         finished_at.clone(),
         catalog_methods,
         catalog_profile_verdict,
+        catalog_contract_verdict,
         CatalogPayloadRefs {
             server_info: server_info_value.as_ref(),
             capabilities: capabilities_value.as_ref(),
@@ -1469,11 +1489,10 @@ pub async fn run_probe_handshake(
     push_tool_schema_compatibility_step(
         &mut steps,
         tools_value.as_ref(),
-        target.descriptor_profile.or_else(|| {
-            target
-                .catalog_profile
-                .map(descriptor_profile_for_catalog_profile)
-        }),
+        Some(effective_descriptor_profile(
+            target.descriptor_profile,
+            target.catalog_profile,
+        )),
         &mut logger,
     );
 
