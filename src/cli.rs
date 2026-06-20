@@ -337,15 +337,27 @@ async fn resolve_catalog_contract(
     base_contract: Option<CatalogContract>,
     base_path: Option<String>,
 ) -> Result<Option<CatalogContract>> {
-    if let Some(path) = override_path.or(base_path) {
-        let raw = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|err| anyhow::anyhow!("Failed to read catalog contract {path}: {err}"))?;
-        let contract = serde_json::from_str(&raw)
-            .map_err(|err| anyhow::anyhow!("Invalid catalog contract JSON in {path}: {err}"))?;
+    if let Some(contract) = override_contract {
         return Ok(Some(contract));
     }
-    Ok(override_contract.or(base_contract))
+    if let Some(path) = override_path {
+        return load_catalog_contract_from_path(&path).await.map(Some);
+    }
+    if let Some(contract) = base_contract {
+        return Ok(Some(contract));
+    }
+    if let Some(path) = base_path {
+        return load_catalog_contract_from_path(&path).await.map(Some);
+    }
+    Ok(None)
+}
+
+async fn load_catalog_contract_from_path(path: &str) -> Result<CatalogContract> {
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|err| anyhow::anyhow!("Failed to read catalog contract {path}: {err}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|err| anyhow::anyhow!("Invalid catalog contract JSON in {path}: {err}"))
 }
 
 fn validate_target(target: &ProbeTarget) -> Result<()> {
@@ -1686,7 +1698,7 @@ mod tests {
             "--transport".to_string(),
             "streamable-http".to_string(),
             "--url".to_string(),
-            "http://127.0.0.1:9526/mcp".to_string(),
+            "https://mcp.example.com/mcp".to_string(),
             "--catalog-contract".to_string(),
             "catalog-contract.json".to_string(),
         ])

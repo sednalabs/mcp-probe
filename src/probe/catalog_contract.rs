@@ -209,66 +209,61 @@ pub fn evaluate_catalog_contract(
         );
     }
 
-    push_count_requirements(
+    push_catalog_section_requirements(
         &mut requirements,
         &mut findings,
-        "tools",
-        actual.tools.len(),
-        contract.expected_tool_count,
-        contract.min_tool_count,
+        CatalogSectionExpectation {
+            section: "tools",
+            available: snapshot.tools.is_some(),
+            actual_count: actual.tools.len(),
+            expected_count: contract.expected_tool_count,
+            min_count: contract.min_tool_count,
+            required_name: "required_tools",
+            expected_identifiers: &contract.required_tools,
+            actual_identifiers: &actual.tools,
+        },
     );
-    push_count_requirements(
+    push_catalog_section_requirements(
         &mut requirements,
         &mut findings,
-        "resources",
-        actual.resources.len(),
-        contract.expected_resource_count,
-        contract.min_resource_count,
+        CatalogSectionExpectation {
+            section: "resources",
+            available: snapshot.resources.is_some(),
+            actual_count: actual.resources.len(),
+            expected_count: contract.expected_resource_count,
+            min_count: contract.min_resource_count,
+            required_name: "required_resources",
+            expected_identifiers: &contract.required_resources,
+            actual_identifiers: &actual.resources,
+        },
     );
-    push_count_requirements(
+    push_catalog_section_requirements(
         &mut requirements,
         &mut findings,
-        "resource_templates",
-        actual.resource_templates.len(),
-        contract.expected_resource_template_count,
-        contract.min_resource_template_count,
+        CatalogSectionExpectation {
+            section: "resource_templates",
+            available: snapshot.resource_templates.is_some(),
+            actual_count: actual.resource_templates.len(),
+            expected_count: contract.expected_resource_template_count,
+            min_count: contract.min_resource_template_count,
+            required_name: "required_resource_templates",
+            expected_identifiers: &contract.required_resource_templates,
+            actual_identifiers: &actual.resource_templates,
+        },
     );
-    push_count_requirements(
+    push_catalog_section_requirements(
         &mut requirements,
         &mut findings,
-        "prompts",
-        actual.prompts.len(),
-        contract.expected_prompt_count,
-        contract.min_prompt_count,
-    );
-
-    push_required_identifiers(
-        &mut requirements,
-        &mut findings,
-        "required_tools",
-        &contract.required_tools,
-        &actual.tools,
-    );
-    push_required_identifiers(
-        &mut requirements,
-        &mut findings,
-        "required_resources",
-        &contract.required_resources,
-        &actual.resources,
-    );
-    push_required_identifiers(
-        &mut requirements,
-        &mut findings,
-        "required_resource_templates",
-        &contract.required_resource_templates,
-        &actual.resource_templates,
-    );
-    push_required_identifiers(
-        &mut requirements,
-        &mut findings,
-        "required_prompts",
-        &contract.required_prompts,
-        &actual.prompts,
+        CatalogSectionExpectation {
+            section: "prompts",
+            available: snapshot.prompts.is_some(),
+            actual_count: actual.prompts.len(),
+            expected_count: contract.expected_prompt_count,
+            min_count: contract.min_prompt_count,
+            required_name: "required_prompts",
+            expected_identifiers: &contract.required_prompts,
+            actual_identifiers: &actual.prompts,
+        },
     );
 
     let status = if findings.is_empty() {
@@ -374,6 +369,60 @@ fn push_count_requirements(
             Some(json!(actual_count)),
         );
     }
+}
+
+struct CatalogSectionExpectation<'a> {
+    section: &'a str,
+    available: bool,
+    actual_count: usize,
+    expected_count: Option<usize>,
+    min_count: Option<usize>,
+    required_name: &'a str,
+    expected_identifiers: &'a [String],
+    actual_identifiers: &'a [String],
+}
+
+fn push_catalog_section_requirements(
+    requirements: &mut Vec<CatalogContractRequirement>,
+    findings: &mut Vec<String>,
+    expectation: CatalogSectionExpectation<'_>,
+) {
+    if !expectation.available {
+        if expectation.expected_count.is_some()
+            || expectation.min_count.is_some()
+            || !expectation.expected_identifiers.is_empty()
+        {
+            push_requirement(
+                requirements,
+                findings,
+                &format!("{}.available", expectation.section),
+                ProbeStepStatus::Error,
+                format!(
+                    "{} catalog payload unavailable; see the corresponding list step",
+                    expectation.section
+                ),
+                Some(json!("available")),
+                Some(json!("unavailable")),
+            );
+        }
+        return;
+    }
+
+    push_count_requirements(
+        requirements,
+        findings,
+        expectation.section,
+        expectation.actual_count,
+        expectation.expected_count,
+        expectation.min_count,
+    );
+    push_required_identifiers(
+        requirements,
+        findings,
+        expectation.required_name,
+        expectation.expected_identifiers,
+        expectation.actual_identifiers,
+    );
 }
 
 fn push_required_identifiers(
@@ -583,5 +632,37 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.contains("catalog_fingerprint")));
+    }
+
+    #[test]
+    fn contract_reports_unavailable_catalog_without_empty_count_noise() {
+        let contract = CatalogContract {
+            schema_version: 1,
+            min_tool_count: Some(1),
+            required_tools: vec!["work_items_find".to_string()],
+            ..Default::default()
+        };
+        let verdict = evaluate_catalog_contract(
+            &contract,
+            CatalogContractSnapshot {
+                transport: TransportType::StreamableHttp,
+                catalog_profile: Some(CatalogProfile::CodexDeferred),
+                descriptor_profile: ToolDescriptorProfile::Basic,
+                tools: None,
+                resources: None,
+                resource_templates: None,
+                prompts: None,
+            },
+        );
+
+        assert_eq!(verdict.status, ProbeStepStatus::Error);
+        assert!(verdict
+            .findings
+            .iter()
+            .any(|finding| finding.contains("payload unavailable")));
+        assert!(!verdict
+            .findings
+            .iter()
+            .any(|finding| finding.contains("observed 0")));
     }
 }
