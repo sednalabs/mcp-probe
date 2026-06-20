@@ -1217,7 +1217,9 @@ mod tests {
             capabilities: None,
             tools: None,
             resources: None,
+            resource_templates: None,
             prompts: None,
+            catalog: None,
             trace: None,
         };
 

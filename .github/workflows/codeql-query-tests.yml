@@ -2,9 +2,6 @@ name: codeql-query-tests
 
 on:
   pull_request:
-    paths:
-      - ".github/codeql/**"
-      - ".github/workflows/**"
   push:
     branches:
       - main
