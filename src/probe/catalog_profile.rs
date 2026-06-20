@@ -146,7 +146,10 @@ fn push_method_requirement(
     if required && unsupported {
         status = ProbeStepStatus::Error;
         detail = Some("method is required by this profile but is not supported".to_string());
-    } else if require_non_empty && summary.item_count.unwrap_or(0) == 0 {
+    } else if require_non_empty
+        && status == ProbeStepStatus::Ok
+        && summary.item_count.unwrap_or(0) == 0
+    {
         status = ProbeStepStatus::Error;
         detail = Some("method returned no discoverable items".to_string());
     }
@@ -274,5 +277,33 @@ mod tests {
             requirement.name == "tools/list pagination drain"
                 && requirement.status == ProbeStepStatus::Ok
         }));
+    }
+
+    #[test]
+    fn method_failure_detail_is_not_masked_by_non_empty_requirement() {
+        let verdict = evaluate_catalog_profile(
+            CatalogProfile::CodexDeferred,
+            &[
+                CatalogMethodSummary {
+                    method: "tools/list".to_string(),
+                    status: ProbeStepStatus::Error,
+                    detail: Some("upstream tool registry failed".to_string()),
+                    page_count: None,
+                    item_count: Some(0),
+                },
+                method("resources/templates/list", Some(0)),
+                method("resources/list", Some(0)),
+                method("prompts/list", Some(0)),
+            ],
+        );
+
+        assert_eq!(verdict.status, ProbeStepStatus::Error);
+        assert!(verdict.findings.iter().any(|finding| {
+            finding.contains("tools/list") && finding.contains("upstream tool registry failed")
+        }));
+        assert!(!verdict
+            .findings
+            .iter()
+            .any(|finding| finding.contains("method returned no discoverable items")));
     }
 }
