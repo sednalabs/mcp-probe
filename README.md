@@ -81,6 +81,25 @@ and `gemini_cli`. `chatgpt_tool` and `apps_sdk_ui` automatically apply the
 matching descriptor-profile checks when `--descriptor-profile` is not set;
 `apps_sdk_ui` also requires native resource-template discovery.
 
+Compare live discovery with a committed catalog contract:
+
+```bash
+mcp-probe run \
+  --transport streamable-http \
+  --url http://127.0.0.1:8000/mcp \
+  --catalog-profile codex_deferred \
+  --catalog-contract ops-catalog-contract.json
+```
+
+Catalog contracts are JSON objects that can pin `transport`,
+`catalog_profile`, `descriptor_profile`, count bounds such as
+`min_tool_count`, required identifiers such as `required_tools`,
+`required_resources`, `required_resource_templates`, and `required_prompts`,
+plus an optional `catalog_fingerprint`. Probe reports include a
+`catalog.contract` step and embed the verdict in the redacted catalog artifact,
+making missing or hidden native catalog entries a repeatable CI failure instead
+of a manual inspection task.
+
 Render a prompt:
 
 ```bash

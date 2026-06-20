@@ -213,6 +213,7 @@ const NOTES: &[&str] = &[
     "- verbosity: summary (default) omits tools/resources/resource_templates/prompts raw payloads; full returns full report payloads and the redacted catalog artifact.",
     "- descriptor_profile: basic (default) checks generic input schemas; chatgpt_tool also checks tool-only ChatGPT connector metadata; apps_sdk_ui requires at least one UI template descriptor.",
     "- catalog_profile: raw_mcp | chatgpt_tool | apps_sdk_ui | codex_deferred | claude_code | gemini_cli adds a host-profile verdict to the catalog artifact.",
+    "- catalog_contract compares live discovery with a JSON contract containing required tools/resources/templates/prompts, count bounds, transport/profile expectations, and optional catalog_fingerprint.",
     "- trace: true captures JSON-RPC traffic (may be large).",
     "- stdio cwd/env: set cwd or env for stdio transports when probing monorepos.",
     "- stdio may be disabled by probe policy; if so, use sse/streamable-http.",

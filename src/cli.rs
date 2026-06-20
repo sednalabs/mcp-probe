@@ -11,8 +11,8 @@ use crate::probe::{
     HttpSmokeTarget, ProbeTarget, RawRequestTarget,
 };
 use crate::report::{
-    apply_report_verbosity, now_iso, CatalogProfile, ProbeReport, ProbeStep, ProbeStepStatus,
-    RawRequestReport, ReportVerbosity,
+    apply_report_verbosity, now_iso, CatalogContract, CatalogProfile, ProbeReport, ProbeStep,
+    ProbeStepStatus, RawRequestReport, ReportVerbosity,
 };
 use crate::scenario::runner::run_script_scenario;
 use crate::scenario::types::ScriptScenario;
@@ -61,6 +61,8 @@ Options:
                            Tool descriptor audit profile (basic|chatgpt_tool|apps_sdk_ui).
   --catalog-profile <value>
                            Host catalog profile (raw_mcp|chatgpt_tool|apps_sdk_ui|codex_deferred|claude_code|gemini_cli).
+  --catalog-contract <path>
+                           Read a JSON catalog contract and compare it with live discovery.
   --prompt <name>           Prompt name for prompt-render.
   --prompt-arg <k=json>     Repeatable prompt-render argument.
   --arguments-json <json>   Prompt-render arguments object.
@@ -114,6 +116,8 @@ struct ProbeTargetOverrides {
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
     catalog_profile: Option<CatalogProfile>,
+    catalog_contract: Option<CatalogContract>,
+    catalog_contract_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -183,6 +187,8 @@ struct ProbeTargetConfig {
     trace_max_bytes: Option<usize>,
     descriptor_profile: Option<ToolDescriptorProfile>,
     catalog_profile: Option<CatalogProfile>,
+    catalog_contract: Option<CatalogContract>,
+    catalog_contract_path: Option<String>,
     use_auth: Option<bool>,
     access_token_path: Option<String>,
 }
@@ -215,6 +221,8 @@ fn map_config_to_overrides(config: &ProbeTargetConfig) -> ProbeTargetOverrides {
         trace_max_bytes: config.trace_max_bytes,
         descriptor_profile: config.descriptor_profile,
         catalog_profile: config.catalog_profile,
+        catalog_contract: config.catalog_contract.clone(),
+        catalog_contract_path: config.catalog_contract_path.clone(),
     }
 }
 
@@ -264,6 +272,14 @@ async fn resolve_target(
         .or(base.transport_type)
         .ok_or_else(|| anyhow::anyhow!("Missing transport configuration."))?;
 
+    let catalog_contract = resolve_catalog_contract(
+        overrides.catalog_contract.clone(),
+        overrides.catalog_contract_path.clone(),
+        base.catalog_contract.clone(),
+        base.catalog_contract_path.clone(),
+    )
+    .await?;
+
     let target = ProbeTarget {
         transport_type,
         command: overrides.command.or(base.command),
@@ -291,6 +307,7 @@ async fn resolve_target(
         trace_max_bytes: overrides.trace_max_bytes.or(base.trace_max_bytes),
         descriptor_profile: overrides.descriptor_profile.or(base.descriptor_profile),
         catalog_profile: overrides.catalog_profile.or(base.catalog_profile),
+        catalog_contract,
     };
 
     validate_target(&target)?;
@@ -312,6 +329,35 @@ fn merge_maps(
         merged.extend(overrides);
     }
     merged
+}
+
+async fn resolve_catalog_contract(
+    override_contract: Option<CatalogContract>,
+    override_path: Option<String>,
+    base_contract: Option<CatalogContract>,
+    base_path: Option<String>,
+) -> Result<Option<CatalogContract>> {
+    if let Some(contract) = override_contract {
+        return Ok(Some(contract));
+    }
+    if let Some(path) = override_path {
+        return load_catalog_contract_from_path(&path).await.map(Some);
+    }
+    if let Some(contract) = base_contract {
+        return Ok(Some(contract));
+    }
+    if let Some(path) = base_path {
+        return load_catalog_contract_from_path(&path).await.map(Some);
+    }
+    Ok(None)
+}
+
+async fn load_catalog_contract_from_path(path: &str) -> Result<CatalogContract> {
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|err| anyhow::anyhow!("Failed to read catalog contract {path}: {err}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|err| anyhow::anyhow!("Invalid catalog contract JSON in {path}: {err}"))
 }
 
 fn validate_target(target: &ProbeTarget) -> Result<()> {
@@ -676,6 +722,7 @@ fn option_consumes_value(option: &str) -> bool {
             | "--trace-max-bytes"
             | "--descriptor-profile"
             | "--catalog-profile"
+            | "--catalog-contract"
             | "--verbosity"
             | "--cwd"
             | "--env"
@@ -717,6 +764,7 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
     let mut trace_max_bytes: Option<usize> = None;
     let mut descriptor_profile: Option<ToolDescriptorProfile> = None;
     let mut catalog_profile: Option<CatalogProfile> = None;
+    let mut catalog_contract_path: Option<String> = None;
     let mut verbosity: Option<ReportVerbosity> = None;
     let mut cwd: Option<String> = None;
     let mut env: HashMap<String, String> = HashMap::new();
@@ -941,6 +989,14 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
                 })?);
                 i += 1;
             }
+            "--catalog-contract" => {
+                let value = args.get(i + 1).cloned().ok_or_else(|| ParseError {
+                    error: "Missing value for --catalog-contract".to_string(),
+                    help: false,
+                })?;
+                catalog_contract_path = Some(value);
+                i += 1;
+            }
             "--verbosity" => {
                 let value = args.get(i + 1).cloned().ok_or_else(|| ParseError {
                     error: "Missing value for --verbosity".to_string(),
@@ -1023,12 +1079,13 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
             || trace_max_bytes.is_some()
             || descriptor_profile.is_some()
             || catalog_profile.is_some()
+            || catalog_contract_path.is_some()
             || verbosity.is_some()
             || cwd.is_some()
             || !env.is_empty();
         if has_conflicts {
             return Err(ParseError {
-                error: "Do not mix --script with transport/command/url/header/cwd/env/config/profile/auth/trace/descriptor/catalog/verbosity options.".to_string(),
+                error: "Do not mix --script with transport/command/url/header/cwd/env/config/profile/auth/trace/descriptor/catalog/contract/verbosity options.".to_string(),
                 help: false,
             });
         }
@@ -1082,6 +1139,8 @@ fn parse_args(argv: &[String]) -> Result<ParsedArgs, ParseError> {
         trace_max_bytes,
         descriptor_profile,
         catalog_profile,
+        catalog_contract: None,
+        catalog_contract_path,
     };
 
     Ok(ParsedArgs {
@@ -1575,7 +1634,7 @@ pub async fn run_cli(argv: Vec<String>) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_auth_args, parse_prompt_argument, parse_prompt_render_args};
+    use super::{parse_args, parse_auth_args, parse_prompt_argument, parse_prompt_render_args};
     use serde_json::json;
 
     #[test]
@@ -1631,5 +1690,23 @@ mod tests {
             Some("http://127.0.0.1:9526/mcp")
         );
         assert!(parsed.expect_error.is_some());
+    }
+
+    #[test]
+    fn parse_args_accepts_catalog_contract_path() {
+        let parsed = parse_args(&[
+            "--transport".to_string(),
+            "streamable-http".to_string(),
+            "--url".to_string(),
+            "https://mcp.example.com/mcp".to_string(),
+            "--catalog-contract".to_string(),
+            "catalog-contract.json".to_string(),
+        ])
+        .expect("args should parse");
+
+        assert_eq!(
+            parsed.overrides.catalog_contract_path.as_deref(),
+            Some("catalog-contract.json")
+        );
     }
 }

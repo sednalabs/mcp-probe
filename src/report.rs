@@ -146,6 +146,83 @@ pub struct CatalogProfileVerdict {
     pub findings: Vec<String>,
 }
 
+fn default_catalog_contract_schema_version() -> u32 {
+    1
+}
+
+/// Expected native MCP catalog contract consumed by probe runs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct CatalogContract {
+    #[serde(default = "default_catalog_contract_schema_version")]
+    pub schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_profile: Option<CatalogProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptor_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_tool_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_tool_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_resource_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_resource_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_resource_template_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_resource_template_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_prompt_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_prompt_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_resource_templates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_prompts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_budget: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+/// One assertion made while comparing a live catalog to a contract.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogContractRequirement {
+    pub name: String,
+    pub status: ProbeStepStatus,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<Value>,
+}
+
+/// Probe verdict for an expected native MCP catalog contract.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CatalogContractVerdict {
+    pub schema_version: u32,
+    pub status: ProbeStepStatus,
+    pub detail: String,
+    pub actual_fingerprint: String,
+    pub requirements: Vec<CatalogContractRequirement>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub findings: Vec<String>,
+    pub contract: CatalogContract,
+}
+
 /// MCP catalog evidence suitable for Ops work-item receipts.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CatalogArtifact {
@@ -155,6 +232,8 @@ pub struct CatalogArtifact {
     pub methods: Vec<CatalogMethodSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<CatalogProfileVerdict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<CatalogContractVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_info: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,6 +427,7 @@ pub fn build_catalog_artifact(
     generated_at: String,
     methods: Vec<CatalogMethodSummary>,
     profile: Option<CatalogProfileVerdict>,
+    contract: Option<CatalogContractVerdict>,
     payloads: CatalogPayloadRefs<'_>,
 ) -> CatalogArtifact {
     CatalogArtifact {
@@ -359,6 +439,7 @@ pub fn build_catalog_artifact(
         },
         methods,
         profile,
+        contract,
         server_info: redact_catalog_value(payloads.server_info),
         capabilities: redact_catalog_value(payloads.capabilities),
         tools: redact_catalog_value(payloads.tools),
@@ -461,6 +542,7 @@ mod tests {
                 page_count: Some(2),
                 item_count: Some(3),
             }],
+            None,
             None,
             CatalogPayloadRefs {
                 server_info: Some(&server_info),
