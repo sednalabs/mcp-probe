@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 use url::Url;
@@ -103,6 +104,56 @@ pub struct OAuthFlowOptions {
     pub redirect_host: String,
     pub redirect_port: u16,
     pub open_browser: bool,
+}
+
+pub(crate) fn normalize_oauth_redirect_host(host: &str) -> Result<String> {
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok("localhost".to_string());
+    }
+
+    let parsed = if let Some(unbracketed) = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        match unbracketed.parse::<IpAddr>() {
+            Ok(address @ IpAddr::V6(_)) => address,
+            _ => {
+                return Err(anyhow!(
+                    "Invalid --redirect-host: expected localhost or a loopback IP address (for example 127.0.0.1 or ::1)."
+                ));
+            }
+        }
+    } else {
+        host.parse::<IpAddr>().map_err(|_| {
+            anyhow!(
+                "Invalid --redirect-host: expected localhost or a loopback IP address (for example 127.0.0.1 or ::1)."
+            )
+        })?
+    };
+
+    if !parsed.is_loopback() {
+        return Err(anyhow!(
+            "Invalid --redirect-host: expected localhost or a loopback IP address (for example 127.0.0.1 or ::1)."
+        ));
+    }
+
+    Ok(parsed.to_string())
+}
+
+fn oauth_redirect_url(host: &str, port: u16) -> Result<Url> {
+    // Native-app OAuth callbacks use plain HTTP only on a validated loopback host.
+    let mut url = Url::parse("https://localhost/oauth/callback")?;
+    url.set_scheme("http")
+        .map_err(|_| anyhow!("Failed to construct OAuth redirect URL."))?;
+    let url_host = match host.parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => format!("[{host}]"),
+        _ => host.to_string(),
+    };
+    url.set_host(Some(&url_host))
+        .map_err(|_| anyhow!("Failed to construct OAuth redirect URL."))?;
+    url.set_port(Some(port))
+        .map_err(|_| anyhow!("Failed to construct OAuth redirect URL."))?;
+    Ok(url)
 }
 
 fn enforce_registration_endpoint_expectation(
@@ -649,8 +700,12 @@ struct CallbackResult {
     error_description: Option<String>,
 }
 
-async fn wait_for_oauth_callback(host: &str, port: u16) -> Result<CallbackResult> {
-    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+async fn wait_for_oauth_callback(
+    host: &str,
+    port: u16,
+    redirect_url: &Url,
+) -> Result<CallbackResult> {
+    let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let (mut socket, _) = listener.accept().await?;
     let mut buffer = Vec::new();
     let mut temp = [0u8; 1024];
@@ -670,7 +725,7 @@ async fn wait_for_oauth_callback(host: &str, port: u16) -> Result<CallbackResult
     let request = String::from_utf8_lossy(&buffer);
     let line = request.lines().next().unwrap_or("");
     let path = line.split_whitespace().nth(1).unwrap_or("");
-    let url = Url::parse(&format!("http://{host}:{port}{path}"))?;
+    let url = redirect_url.join(path)?;
     let mut code = None;
     let mut state = None;
     let mut error = None;
@@ -737,6 +792,10 @@ fn open_browser(url: &str) -> bool {
 
 /// Run an OAuth authorization flow and store tokens in the cache.
 pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
+    let redirect_host = normalize_oauth_redirect_host(&options.redirect_host)?;
+    let redirect_url = oauth_redirect_url(&redirect_host, options.redirect_port)?;
+    let redirect_url_string = redirect_url.to_string();
+
     let mut manager = AuthorizationManager::new(options.server_url.clone()).await?;
     let metadata = manager.discover_metadata().await?;
     enforce_registration_endpoint_expectation(
@@ -745,10 +804,6 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
     )?;
     manager.set_metadata(metadata);
 
-    let redirect_url = format!(
-        "http://{}:{}/oauth/callback",
-        options.redirect_host, options.redirect_port
-    );
     let scopes: Vec<String> = options
         .scope
         .as_ref()
@@ -757,8 +812,9 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
     let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
 
     let (client_id, client_secret) = if let Some(client_id) = options.client_id.clone() {
-        let mut client_config = OAuthClientConfig::new(client_id.clone(), redirect_url.clone())
-            .with_scopes(scopes.clone());
+        let mut client_config =
+            OAuthClientConfig::new(client_id.clone(), redirect_url_string.clone())
+                .with_scopes(scopes.clone());
         if let Some(client_secret) = options.client_secret.clone() {
             client_config = client_config.with_client_secret(client_secret);
         }
@@ -766,7 +822,7 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
         (client_id, options.client_secret.clone())
     } else if options.allow_dcr {
         let config = manager
-            .register_client("mcp-probe", &redirect_url, &scope_refs)
+            .register_client("mcp-probe", &redirect_url_string, &scope_refs)
             .await?;
         (config.client_id, config.client_secret)
     } else {
@@ -782,7 +838,8 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
         eprintln!("Open this URL to authorize:\n{auth_url}");
     }
 
-    let callback = wait_for_oauth_callback(&options.redirect_host, options.redirect_port).await?;
+    let callback =
+        wait_for_oauth_callback(&redirect_host, options.redirect_port, &redirect_url).await?;
     if let Some(error) = callback.error {
         let detail = callback
             .error_description
@@ -834,7 +891,7 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 
 #[cfg(test)]
 mod tests {
-    use super::enforce_registration_endpoint_expectation;
+    use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
 
     #[test]
     fn registration_endpoint_expectation_accepts_present_endpoint() {
@@ -851,5 +908,14 @@ mod tests {
         assert!(result.is_err());
         let message = result.expect_err("should fail").to_string();
         assert!(message.contains("missing registration_endpoint"));
+    }
+
+    #[test]
+    fn oauth_redirect_url_formats_ipv6_authority() {
+        let url = oauth_redirect_url("::1", 3333).expect("loopback URL should be valid");
+        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.host_str(), Some("[::1]"));
+        assert_eq!(url.port(), Some(3333));
+        assert_eq!(url.path(), "/oauth/callback");
     }
 }
