@@ -1,8 +1,8 @@
 //! CLI entry points for the probe.
 
 use crate::auth::{
-    attach_access_token, attach_auth_header, read_access_token_from_path, run_oauth_flow,
-    normalize_oauth_redirect_host, OAuthFlowOptions,
+    attach_access_token, attach_auth_header, normalize_oauth_redirect_host,
+    read_access_token_from_path, run_oauth_flow, OAuthFlowOptions,
 };
 use crate::logging::{LogFormat, LogLevel};
 use crate::probe::schema_compat::ToolDescriptorProfile;
@@ -472,10 +472,11 @@ fn parse_auth_args(argv: &[String]) -> Result<AuthArgs, ParseError> {
         error: "Missing --server".to_string(),
         help: false,
     })?;
-    let redirect_host = normalize_oauth_redirect_host(&redirect_host).map_err(|error| ParseError {
-        error: error.to_string(),
-        help: false,
-    })?;
+    let redirect_host =
+        normalize_oauth_redirect_host(&redirect_host).map_err(|error| ParseError {
+            error: error.to_string(),
+            help: false,
+        })?;
 
     Ok(AuthArgs {
         server_url,
