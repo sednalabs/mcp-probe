@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   scan:
-    name: Scan dependencies
+    name: scan-pr / osv-scan
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
