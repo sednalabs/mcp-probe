@@ -22,28 +22,148 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scan-scheduled:
-    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@fa4ff678dd5d0a4fa3d628e57af8162873e93cd6
+  scan:
+    name: Scan dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: read
       security-events: write
-    with:
-      scan-args: |-
-        -r
-        --skip-git
-        ./
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
-  scan-pr:
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@fa4ff678dd5d0a4fa3d628e57af8162873e93cd6
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    with:
-      scan-args: |-
-        -r
-        --skip-git
-        ./
+      - name: Run OSV-Scanner
+        id: scan
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |-
+            --format=json
+            --output=results.json
+            -r
+            ./
+
+      - name: Convert results to SARIF
+        id: report
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |-
+            --output=results.sarif
+            --new=results.json
+            --gh-annotations=${{ github.event_name == 'pull_request' }}
+            --fail-on-vuln=true
+
+      - name: Validate scan outputs
+        id: validate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def load_json(path: str):
+              output = Path(path)
+              if not output.is_file() or output.stat().st_size == 0:
+                  raise SystemExit(f"::error::{path} is missing or empty")
+              try:
+                  return json.loads(output.read_text(encoding="utf-8"))
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                  raise SystemExit(f"::error::{path} is not valid JSON: {error}") from error
+
+          scan = load_json("results.json")
+          results = scan.get("results")
+          if not isinstance(results, list):
+              raise SystemExit("::error::results.json does not contain a results array")
+
+          finding_count = 0
+          for result in results:
+              if not isinstance(result, dict):
+                  raise SystemExit("::error::results.json contains a malformed result")
+              packages = result.get("packages", [])
+              if not isinstance(packages, list):
+                  raise SystemExit("::error::results.json contains a malformed packages value")
+              for package in packages:
+                  if not isinstance(package, dict):
+                      raise SystemExit("::error::results.json contains a malformed package")
+                  vulnerabilities = package.get("vulnerabilities", [])
+                  if not isinstance(vulnerabilities, list):
+                      raise SystemExit(
+                          "::error::results.json contains a malformed vulnerabilities value"
+                      )
+                  finding_count += len(vulnerabilities)
+
+          sarif = load_json("results.sarif")
+          runs = sarif.get("runs")
+          if sarif.get("version") != "2.1.0" or not isinstance(runs, list) or not runs:
+              raise SystemExit("::error::results.sarif is not a complete SARIF 2.1.0 document")
+
+          sarif_result_count = 0
+          for run in runs:
+              run_results = run.get("results", [])
+              if not isinstance(run_results, list):
+                  raise SystemExit("::error::results.sarif contains a malformed results value")
+              sarif_result_count += len(run_results)
+
+          if finding_count > 0 and sarif_result_count == 0:
+              raise SystemExit(
+                  "::error::OSV findings were not represented in the generated SARIF"
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"finding-count={finding_count}\n")
+              output.write(f"sarif-result-count={sarif_result_count}\n")
+
+          print(
+              f"Validated {finding_count} OSV finding(s) and "
+              f"{sarif_result_count} SARIF result(s)."
+          )
+          PY
+
+      - name: Upload scan evidence
+        if: ${{ always() && steps.validate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: osv-scanner-results
+          path: |
+            results.json
+            results.sarif
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        if: ${{ always() && steps.validate.outcome == 'success' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: results.sarif
+
+      - name: Enforce scan outcomes
+        if: always()
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          set -euo pipefail
+          failed=0
+          if [[ "$SCAN_OUTCOME" != "success" ]]; then
+            echo "::error::OSV-Scanner did not complete successfully"
+            failed=1
+          fi
+          if [[ "$REPORT_OUTCOME" != "success" ]]; then
+            echo "::error::OSV reporter did not complete successfully"
+            failed=1
+          fi
+          if [[ "$VALIDATION_OUTCOME" != "success" ]]; then
+            echo "::error::OSV scan outputs did not pass structural validation"
+            failed=1
+          fi
+          exit "$failed"

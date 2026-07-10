@@ -12,7 +12,7 @@ keywords = ["mcp", "probe", "model-context-protocol", "debugging", "cli"]
 categories = ["command-line-utilities", "development-tools::testing"]
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.103"
 clap = { version = "4.5.46", features = ["derive"] }
 futures-util = "0.3.31"
 oauth2 = "5.0.0"

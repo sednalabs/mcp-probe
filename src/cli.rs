@@ -2,7 +2,7 @@
 
 use crate::auth::{
     attach_access_token, attach_auth_header, read_access_token_from_path, run_oauth_flow,
-    OAuthFlowOptions,
+    normalize_oauth_redirect_host, OAuthFlowOptions,
 };
 use crate::logging::{LogFormat, LogLevel};
 use crate::probe::schema_compat::ToolDescriptorProfile;
@@ -85,7 +85,7 @@ Auth options:
   --client-id <value>       Pre-registered OAuth client ID.
   --client-secret <value>   Pre-registered OAuth client secret.
   --allow-dcr               Allow dynamic client registration if no client ID.
-  --redirect-host <value>   Redirect callback host (default: 127.0.0.1).
+  --redirect-host <value>   Localhost or loopback IP for the callback (default: 127.0.0.1).
   --redirect-port <value>   Redirect callback port (default: 3333).
   --open                    Open browser automatically.
 "#;
@@ -470,6 +470,10 @@ fn parse_auth_args(argv: &[String]) -> Result<AuthArgs, ParseError> {
 
     let server_url = server_url.ok_or_else(|| ParseError {
         error: "Missing --server".to_string(),
+        help: false,
+    })?;
+    let redirect_host = normalize_oauth_redirect_host(&redirect_host).map_err(|error| ParseError {
+        error: error.to_string(),
         help: false,
     })?;
 
@@ -1648,6 +1652,58 @@ mod tests {
 
         assert_eq!(parsed.server_url, "http://127.0.0.1:9526/mcp");
         assert!(parsed.expect_registration_endpoint);
+    }
+
+    #[test]
+    fn parse_auth_args_accepts_only_local_redirect_hosts() {
+        for (host, expected) in [
+            ("localhost", "localhost"),
+            ("LOCALHOST", "localhost"),
+            ("127.0.0.1", "127.0.0.1"),
+            ("127.42.0.9", "127.42.0.9"),
+            ("::1", "::1"),
+            ("[::1]", "::1"),
+        ] {
+            let parsed = parse_auth_args(&[
+                "--server".to_string(),
+                "https://issuer.example/mcp".to_string(),
+                "--redirect-host".to_string(),
+                host.to_string(),
+            ])
+            .expect("local redirect host should parse");
+
+            assert_eq!(parsed.redirect_host, expected, "host: {host}");
+        }
+    }
+
+    #[test]
+    fn parse_auth_args_rejects_non_local_or_ambiguous_redirect_hosts() {
+        for host in [
+            "example.com",
+            "localhost.example.com",
+            "localhost.",
+            "0.0.0.0",
+            "192.0.2.1",
+            "::",
+            "::ffff:127.0.0.1",
+            "127.0.0.1:3333",
+            "[127.0.0.1]",
+            "",
+        ] {
+            let error = parse_auth_args(&[
+                "--server".to_string(),
+                "https://issuer.example/mcp".to_string(),
+                "--redirect-host".to_string(),
+                host.to_string(),
+            ])
+            .expect_err("non-local redirect host should be rejected");
+
+            assert_eq!(
+                error.error,
+                "Invalid --redirect-host: expected localhost or a loopback IP address (for example 127.0.0.1 or ::1).",
+                "host: {host}"
+            );
+        }
     }
 
     #[test]
