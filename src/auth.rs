@@ -914,7 +914,7 @@ mod tests {
     fn oauth_redirect_url_formats_ipv6_authority() {
         let url = oauth_redirect_url("::1", 3333).expect("loopback URL should be valid");
         assert_eq!(url.scheme(), "http");
-        assert_eq!(url.host_str(), Some("::1"));
+        assert_eq!(url.host_str(), Some("[::1]"));
         assert_eq!(url.port(), Some(3333));
         assert_eq!(url.path(), "/oauth/callback");
     }
