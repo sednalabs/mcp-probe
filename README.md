@@ -150,6 +150,8 @@ neutral comparison and publication notes.
 The public repository is expected to run:
 
 - Rust formatting, clippy, and tests.
+- Cobertura coverage generation and artifact upload. The optional GitHub Code
+  Quality upload is best-effort when that repository feature is unavailable.
 - Dependency governance through `cargo-deny`, `cargo-audit`, and
   `cargo-outdated`.
 - CodeQL with security and quality queries.
