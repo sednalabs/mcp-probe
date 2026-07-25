@@ -396,6 +396,7 @@ pub async fn run_script_scenario(
                 }
             }
         } else {
+            status = ProbeStepStatus::Error;
             detail = Some("No assertion provided".to_string());
         }
 
