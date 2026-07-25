@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Checkout repository
         # actions/checkout v6
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -43,7 +43,7 @@ jobs:
 
       - name: Install coverage tool
         # taiki-e/install-action v2
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912
+        uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094
         with:
           tool: cargo-llvm-cov
 
@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload Rust coverage to GitHub Code Quality
         # actions/upload-code-coverage v1
-        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1
         with:
           file: coverage/rust.xml
           language: Rust
