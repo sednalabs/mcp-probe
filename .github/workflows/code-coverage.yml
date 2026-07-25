@@ -60,6 +60,7 @@ jobs:
           file: coverage/rust.xml
           language: Rust
           label: code-coverage/rust
+          fail-on-error: false
 
       - name: Upload Cobertura report
         # actions/upload-artifact v7

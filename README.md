@@ -110,6 +110,18 @@ mcp-probe prompt-render \
   --arguments-json '{"case_id":"C123"}'
 ```
 
+### Scripted scenario assertions
+
+Scripted scenarios fail closed. Every tool step must define at least one
+semantic assertion with `expect`, `expect_error: true`,
+`expect_error: "<matcher>"`, `snapshot: true`, or
+`snapshot: "<snapshot-key>"`. An unasserted step is rejected before the probe
+connects to the target, so a successful tool invocation cannot be mistaken for
+a passed scenario.
+
+Use `probe_call_tool` when the intended operation is an execution-only
+diagnostic rather than an asserted scenario.
+
 ## MCP Tool Surface
 
 When launched as an MCP server, the probe exposes:
@@ -138,6 +150,8 @@ neutral comparison and publication notes.
 The public repository is expected to run:
 
 - Rust formatting, clippy, and tests.
+- Cobertura coverage generation and artifact upload. The optional GitHub Code
+  Quality upload is best-effort when that repository feature is unavailable.
 - Dependency governance through `cargo-deny`, `cargo-audit`, and
   `cargo-outdated`.
 - CodeQL with security and quality queries.
