@@ -25,6 +25,17 @@ cargo install --git https://github.com/sednalabs/mcp-probe.git
 Crates.io publication is planned but not required to use the current repository
 source package.
 
+## Hosted Binary Artifacts
+
+The `build-binary` GitHub Actions workflow produces native Linux artifacts for
+`x86_64` and `aarch64`. Each artifact includes the executable and a matching
+SHA-256 checksum file. After downloading and extracting one artifact, verify it
+from the extraction directory before use:
+
+```bash
+sha256sum -c mcp-probe-linux-aarch64.sha256
+```
+
 ## CLI Examples
 
 Run a streamable HTTP probe:
