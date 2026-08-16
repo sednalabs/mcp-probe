@@ -55,18 +55,43 @@ jobs:
       - name: Stage binary artifact
         run: |
           set -euo pipefail
-          mkdir -p dist
-          install -m 0755 target/release/mcp-probe "dist/mcp-probe-linux-${{ matrix.arch }}"
+          artifact="mcp-probe-linux-${{ matrix.arch }}"
+          mkdir -p "dist/package" "dist/verify"
+          install -m 0755 target/release/mcp-probe "dist/package/${artifact}"
+
+          test "$(stat -c '%a' "dist/package/${artifact}")" = 755
+          case "${{ matrix.arch }}" in
+            x86_64) expected_machine='Advanced Micro Devices X86-64' ;;
+            aarch64) expected_machine='AArch64' ;;
+            *) echo "unsupported architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+          readelf -h "dist/package/${artifact}" | grep -F "Machine:" | grep -F "$expected_machine"
+
+          (
+            cd dist/package
+            sha256sum "$artifact" > "${artifact}.sha256"
+            sha256sum -c "${artifact}.sha256"
+            tar -czf "../${artifact}.tar.gz" "$artifact" "${artifact}.sha256"
+          )
           (
             cd dist
-            sha256sum "mcp-probe-linux-${{ matrix.arch }}" > "mcp-probe-linux-${{ matrix.arch }}.sha256"
+            sha256sum "${artifact}.tar.gz" > "${artifact}.tar.gz.sha256"
+            sha256sum -c "${artifact}.tar.gz.sha256"
           )
+
+          tar -xzf "dist/${artifact}.tar.gz" -C dist/verify
+          test "$(stat -c '%a' "dist/verify/${artifact}")" = 755
+          (
+            cd dist/verify
+            sha256sum -c "${artifact}.sha256"
+          )
+          readelf -h "dist/verify/${artifact}" | grep -F "Machine:" | grep -F "$expected_machine"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mcp-probe-linux-${{ matrix.arch }}
           path: |
-            dist/mcp-probe-linux-${{ matrix.arch }}
-            dist/mcp-probe-linux-${{ matrix.arch }}.sha256
+            dist/mcp-probe-linux-${{ matrix.arch }}.tar.gz
+            dist/mcp-probe-linux-${{ matrix.arch }}.tar.gz.sha256
           if-no-files-found: error

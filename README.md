@@ -28,13 +28,31 @@ source package.
 ## Hosted Binary Artifacts
 
 The `build-binary` GitHub Actions workflow produces native Linux artifacts for
-`x86_64` and `aarch64`. Each artifact includes the executable and a matching
-SHA-256 checksum file. After downloading and extracting one artifact, verify it
-from the extraction directory before use:
+`x86_64` and `aarch64`. Download the artifact matching `uname -m`; its GitHub
+artifact ZIP contains a mode-preserving tar archive and that archive's SHA-256
+checksum. From the directory where the GitHub artifact ZIP was extracted,
+verify the archive, extract it, verify the binary, and install it as follows:
 
 ```bash
-sha256sum -c mcp-probe-linux-aarch64.sha256
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|aarch64) ;;
+  *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+
+sha256sum -c "mcp-probe-linux-${arch}.tar.gz.sha256"
+tar -xzf "mcp-probe-linux-${arch}.tar.gz"
+sha256sum -c "mcp-probe-linux-${arch}.sha256"
+test "$(stat -c '%a' "mcp-probe-linux-${arch}")" = 755
+file "mcp-probe-linux-${arch}"
+
+install -Dm0755 "mcp-probe-linux-${arch}" "$HOME/.local/bin/mcp-probe"
+export PATH="$HOME/.local/bin:$PATH"
+mcp-probe server
 ```
+
+The final command starts the probe's stdio MCP server. Add the `PATH` export to
+your shell profile if `$HOME/.local/bin` is not already present there.
 
 ## CLI Examples
 
