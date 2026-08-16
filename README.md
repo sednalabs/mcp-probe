@@ -27,11 +27,16 @@ source package.
 
 ## Hosted Binary Artifacts
 
-The `build-binary` GitHub Actions workflow produces native Linux artifacts for
-`x86_64` and `aarch64`. Download the artifact matching `uname -m`; its GitHub
-artifact ZIP contains a mode-preserving tar archive and that archive's SHA-256
-checksum. From the directory where the GitHub artifact ZIP was extracted,
-verify the archive, extract it, verify the binary, and install it as follows:
+The `build-binary` GitHub Actions workflow produces native GNU/Linux artifacts
+for `x86_64` and `aarch64` on Ubuntu 24.04 runners. These dynamically linked
+binaries require glibc 2.39 or newer; architecture matching alone is not
+sufficient, and musl-based systems are not supported by these hosted artifacts.
+
+Download the artifact matching `uname -m`. Its GitHub artifact ZIP contains a
+mode-preserving tar archive and that archive's SHA-256 checksum. From the
+directory where the GitHub artifact ZIP was extracted, verify the archive,
+extract it into a fresh directory, verify the binary and build metadata, and
+perform the glibc preflight before installing or overwriting `mcp-probe`:
 
 ```bash
 arch="$(uname -m)"
@@ -40,13 +45,30 @@ case "$arch" in
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-sha256sum -c "mcp-probe-linux-${arch}.tar.gz.sha256"
-tar -xzf "mcp-probe-linux-${arch}.tar.gz"
-sha256sum -c "mcp-probe-linux-${arch}.sha256"
-test "$(stat -c '%a' "mcp-probe-linux-${arch}")" = 755
-file "mcp-probe-linux-${arch}"
+extract_dir="$(mktemp -d)"
+trap 'find "$extract_dir" -depth -delete' EXIT
 
-install -Dm0755 "mcp-probe-linux-${arch}" "$HOME/.local/bin/mcp-probe"
+sha256sum -c "mcp-probe-linux-${arch}.tar.gz.sha256"
+tar -xzf "mcp-probe-linux-${arch}.tar.gz" -C "$extract_dir"
+(
+  cd "$extract_dir"
+  sha256sum -c "mcp-probe-linux-${arch}.sha256"
+)
+test "$(stat -c '%a' "$extract_dir/mcp-probe-linux-${arch}")" = 755
+grep -Fx "target-arch=${arch}" "$extract_dir/mcp-probe-linux-${arch}.build-info"
+grep -Fx 'minimum-glibc=2.39' "$extract_dir/mcp-probe-linux-${arch}.build-info"
+
+glibc_identity="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+case "$glibc_identity" in
+  'glibc '*) host_glibc="${glibc_identity#glibc }" ;;
+  *) echo 'hosted mcp-probe binaries require glibc 2.39 or newer; this system does not report glibc' >&2; exit 1 ;;
+esac
+if ! printf '%s\n' 2.39 "$host_glibc" | sort -V -C; then
+  echo "hosted mcp-probe binaries require glibc 2.39 or newer; found ${host_glibc}" >&2
+  exit 1
+fi
+
+install -Dm0755 "$extract_dir/mcp-probe-linux-${arch}" "$HOME/.local/bin/mcp-probe"
 export PATH="$HOME/.local/bin:$PATH"
 mcp-probe server
 ```

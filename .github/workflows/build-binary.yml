@@ -66,12 +66,29 @@ jobs:
             *) echo "unsupported architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
           esac
           readelf -h "dist/package/${artifact}" | grep -F "Machine:" | grep -F "$expected_machine"
+          required_glibc="$({ readelf --version-info "dist/package/${artifact}" || true; } \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' \
+            | sed 's/^GLIBC_//' \
+            | sort -Vu \
+            | tail -n 1)"
+          test "$required_glibc" = 2.39
+
+          printf '%s\n' \
+            'format-version=1' \
+            'target-os=linux' \
+            'target-arch=${{ matrix.arch }}' \
+            'libc=glibc' \
+            "minimum-glibc=${required_glibc}" \
+            > "dist/package/${artifact}.build-info"
 
           (
             cd dist/package
-            sha256sum "$artifact" > "${artifact}.sha256"
+            sha256sum "$artifact" "${artifact}.build-info" > "${artifact}.sha256"
             sha256sum -c "${artifact}.sha256"
-            tar -czf "../${artifact}.tar.gz" "$artifact" "${artifact}.sha256"
+            tar -czf "../${artifact}.tar.gz" \
+              "$artifact" \
+              "${artifact}.build-info" \
+              "${artifact}.sha256"
           )
           (
             cd dist
@@ -86,6 +103,10 @@ jobs:
             sha256sum -c "${artifact}.sha256"
           )
           readelf -h "dist/verify/${artifact}" | grep -F "Machine:" | grep -F "$expected_machine"
+          grep -Fx 'target-os=linux' "dist/verify/${artifact}.build-info"
+          grep -Fx 'target-arch=${{ matrix.arch }}' "dist/verify/${artifact}.build-info"
+          grep -Fx 'libc=glibc' "dist/verify/${artifact}.build-info"
+          grep -Fx 'minimum-glibc=2.39' "dist/verify/${artifact}.build-info"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
