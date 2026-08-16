@@ -39,6 +39,8 @@ extract it into a fresh directory, verify the binary and build metadata, and
 perform the glibc preflight before installing or overwriting `mcp-probe`:
 
 ```bash
+set -euo pipefail
+
 arch="$(uname -m)"
 case "$arch" in
   x86_64|aarch64) ;;
