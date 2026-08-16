@@ -25,6 +25,95 @@ cargo install --git https://github.com/sednalabs/mcp-probe.git
 Crates.io publication is planned but not required to use the current repository
 source package.
 
+## Hosted Binary Artifacts
+
+The `build-binary` GitHub Actions workflow builds and verifies native GNU/Linux
+binaries for `x86_64` and `aarch64` on Ubuntu 24.04 runners. Pull-request runs
+upload no installable artifacts. Only a successful `push` run for
+`refs/heads/main` uploads artifacts, and every artifact, archive, binary, and
+checksum-covered build record includes the exact 40-character source commit.
+
+These dynamically linked binaries require glibc 2.39 or newer; architecture
+matching alone is not sufficient, and musl-based systems are not supported.
+
+Select a successful trusted-main `build-binary` run ID and its exact source SHA
+before starting. The following sequence proves the run was a successful `push`
+on `main`, downloads the SHA-qualified artifact matching `uname -m`, verifies
+the archive and its privately extracted contents, and performs the glibc
+preflight before installing or overwriting `mcp-probe`:
+
+```bash
+set -euo pipefail
+
+: "${MCP_PROBE_TRUSTED_MAIN_RUN_ID:?set this to a trusted build-binary main-push run ID}"
+: "${MCP_PROBE_SOURCE_SHA:?set this to the exact 40-character source SHA for that run}"
+repo='sednalabs/mcp-probe'
+run_id="$MCP_PROBE_TRUSTED_MAIN_RUN_ID"
+source_sha="$MCP_PROBE_SOURCE_SHA"
+
+case "$run_id" in
+  ''|*[!0-9]*) echo 'trusted main run ID must contain decimal digits only' >&2; exit 1 ;;
+esac
+case "$source_sha" in
+  ''|*[!0-9a-f]*) echo 'source SHA must contain lowercase hexadecimal characters only' >&2; exit 1 ;;
+esac
+test "${#source_sha}" -eq 40
+
+trusted_sha="$(gh run view "$run_id" --repo "$repo" \
+  --json event,headBranch,headSha,conclusion \
+  --jq 'select(.event == "push" and .headBranch == "main" and .conclusion == "success") | .headSha')"
+test "$trusted_sha" = "$source_sha"
+
+arch="$(uname -m)"
+case "$arch" in
+  x86_64) expected_machine='Advanced Micro Devices X86-64' ;;
+  aarch64) expected_machine='AArch64' ;;
+  *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+artifact="mcp-probe-${source_sha}-linux-${arch}"
+
+umask 077
+extract_dir="$(mktemp -d)"
+trap 'find "$extract_dir" -depth -delete' EXIT
+download_dir="$extract_dir/download"
+payload_dir="$extract_dir/payload"
+mkdir "$download_dir" "$payload_dir"
+
+gh run download "$run_id" --repo "$repo" --name "$artifact" --dir "$download_dir"
+
+(
+  cd "$download_dir"
+  sha256sum -c "${artifact}.tar.gz.sha256"
+)
+tar -xzf "$download_dir/${artifact}.tar.gz" -C "$payload_dir"
+(
+  cd "$payload_dir"
+  sha256sum -c "${artifact}.sha256"
+)
+test "$(stat -c '%a' "$payload_dir/$artifact")" = 755
+readelf -h "$payload_dir/$artifact" | grep -F 'Machine:' | grep -F "$expected_machine"
+grep -Fx "target-arch=${arch}" "$payload_dir/${artifact}.build-info"
+grep -Fx 'minimum-glibc=2.39' "$payload_dir/${artifact}.build-info"
+grep -Fx "source-commit=${source_sha}" "$payload_dir/${artifact}.build-info"
+
+glibc_identity="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+case "$glibc_identity" in
+  'glibc '*) host_glibc="${glibc_identity#glibc }" ;;
+  *) echo 'hosted mcp-probe binaries require glibc 2.39 or newer; this system does not report glibc' >&2; exit 1 ;;
+esac
+if ! printf '%s\n' 2.39 "$host_glibc" | sort -V -C; then
+  echo "hosted mcp-probe binaries require glibc 2.39 or newer; found ${host_glibc}" >&2
+  exit 1
+fi
+
+install -Dm0755 "$payload_dir/$artifact" "$HOME/.local/bin/mcp-probe"
+export PATH="$HOME/.local/bin:$PATH"
+mcp-probe server
+```
+
+The final command starts the probe's stdio MCP server. Add the `PATH` export to
+your shell profile if `$HOME/.local/bin` is not already present there.
+
 ## CLI Examples
 
 Run a streamable HTTP probe:
