@@ -892,7 +892,7 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 #[cfg(test)]
 mod tests {
     use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
-    use oauth2::http::Response;
+    use oauth2::{http::Response, HttpResponse};
     use rmcp::transport::auth::{
         AuthorizationManager, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
         OAuthHttpRequest,
