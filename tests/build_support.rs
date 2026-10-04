@@ -24,9 +24,9 @@ fn collect_git_watch_paths_tracks_ref_and_index_inputs() {
     write_file(&git_dir.join("refs/heads/main"), "abc123\n");
     write_file(&git_dir.join("logs/refs/heads/main"), "");
 
-    let mut actual = build_support::collect_git_watch_paths(&repo_root)
+    let mut actual = build_support::collect_git_watch_paths(repo_root)
         .into_iter()
-        .map(|path| path.strip_prefix(&repo_root).unwrap().to_path_buf())
+        .map(|path| path.strip_prefix(repo_root).unwrap().to_path_buf())
         .collect::<Vec<_>>();
     actual.sort();
 
@@ -56,9 +56,9 @@ fn collect_git_watch_paths_resolves_gitdir_files() {
     write_file(&actual_git_dir.join("refs/heads/work"), "def456\n");
     write_file(&actual_git_dir.join("logs/refs/heads/work"), "");
 
-    let mut actual = build_support::collect_git_watch_paths(&repo_root)
+    let mut actual = build_support::collect_git_watch_paths(repo_root)
         .into_iter()
-        .map(|path| path.strip_prefix(&repo_root).unwrap().to_path_buf())
+        .map(|path| path.strip_prefix(repo_root).unwrap().to_path_buf())
         .collect::<Vec<_>>();
     actual.sort();
 
@@ -87,10 +87,10 @@ fn collect_package_watch_paths_includes_nested_inputs_and_skips_generated_trees(
     write_file(&repo_root.join(".git/config"), "generated metadata\n");
     write_file(&repo_root.join("target/debug/output"), "generated output\n");
 
-    let actual = build_support::collect_package_watch_paths(&repo_root)
+    let actual = build_support::collect_package_watch_paths(repo_root)
         .expect("enumerate package inputs")
         .into_iter()
-        .map(|path| path.strip_prefix(&repo_root).unwrap().to_path_buf())
+        .map(|path| path.strip_prefix(repo_root).unwrap().to_path_buf())
         .collect::<Vec<_>>();
 
     assert!(actual.contains(&PathBuf::from("src/lib.rs")));
