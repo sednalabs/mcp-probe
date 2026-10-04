@@ -892,6 +892,14 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 #[cfg(test)]
 mod tests {
     use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
+    use oauth2::{http::Response, HttpResponse};
+    use rmcp::transport::auth::{
+        AuthorizationManager, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
+        OAuthHttpRequest,
+    };
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn registration_endpoint_expectation_accepts_present_endpoint() {
@@ -917,5 +925,96 @@ mod tests {
         assert_eq!(url.host_str(), Some("[::1]"));
         assert_eq!(url.port(), Some(3333));
         assert_eq!(url.path(), "/oauth/callback");
+    }
+
+    struct RecordingOAuthHttpClient {
+        responses: Mutex<VecDeque<HttpResponse>>,
+        destinations: Mutex<Vec<String>>,
+        allowed_destinations: Vec<String>,
+    }
+
+    impl OAuthHttpClient for RecordingOAuthHttpClient {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            let destination = request.request.uri().to_string();
+            self.destinations
+                .lock()
+                .expect("destination lock")
+                .push(destination.clone());
+            let response = if self.allowed_destinations.contains(&destination) {
+                self.responses.lock().expect("response lock").pop_front()
+            } else {
+                None
+            };
+
+            Box::pin(async move {
+                response.ok_or_else(|| OAuthHttpClientError::new("unexpected OAuth HTTP request"))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_metadata_rejects_private_authorization_server() {
+        let server_url = "http://probe.example/mcp";
+        let resource_metadata_url = "http://probe.example/.well-known/oauth-protected-resource";
+        let unauthorized = Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+            )
+            .body(Vec::new())
+            .expect("build controlled challenge response");
+        let metadata = serde_json::json!({
+            "resource": server_url,
+            "authorization_servers": ["http://169.254.169.254/latest/meta-data"]
+        });
+        let metadata = Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(&metadata).expect("serialize controlled metadata"))
+            .expect("build controlled metadata response");
+        let http_client = Arc::new(RecordingOAuthHttpClient {
+            responses: Mutex::new(VecDeque::from([unauthorized, metadata])),
+            destinations: Mutex::new(Vec::new()),
+            allowed_destinations: vec![
+                server_url.to_string(),
+                resource_metadata_url.to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server/mcp".to_string(),
+                "http://probe.example/.well-known/openid-configuration/mcp".to_string(),
+                "http://probe.example/mcp/.well-known/openid-configuration".to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server".to_string(),
+            ],
+        });
+        let manager =
+            AuthorizationManager::new_with_oauth_http_client(server_url, http_client.clone())
+                .await
+                .expect("construct OAuth manager with injected client");
+        let result = timeout(Duration::from_secs(2), manager.discover_metadata())
+            .await
+            .expect("metadata discovery should terminate");
+        assert!(
+            result.is_err(),
+            "private authorization server must be rejected"
+        );
+        let destinations = http_client
+            .destinations
+            .lock()
+            .expect("destination lock")
+            .clone();
+        assert_eq!(
+            destinations,
+            vec![
+                server_url.to_string(),
+                resource_metadata_url.to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server/mcp".to_string(),
+                "http://probe.example/.well-known/openid-configuration/mcp".to_string(),
+                "http://probe.example/mcp/.well-known/openid-configuration".to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server".to_string(),
+            ],
+            "only the expected same-origin discovery requests are made"
+        );
+        assert!(destinations
+            .iter()
+            .all(|destination| !destination.contains("169.254.169.254")));
     }
 }

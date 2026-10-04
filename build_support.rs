@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Collect the git files whose changes should force build provenance refresh.
@@ -20,6 +21,33 @@ pub fn collect_git_watch_paths(repo_root: &Path) -> Vec<PathBuf> {
     }
 
     paths
+}
+
+/// Collect package inputs recursively so source additions and edits refresh provenance.
+pub fn collect_package_watch_paths(repo_root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    collect_package_paths(repo_root, repo_root, &mut paths)?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn collect_package_paths(root: &Path, dir: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
+    paths.push(dir.to_path_buf());
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if dir == root && (name == ".git" || name == "target") {
+            continue;
+        }
+        paths.push(path.clone());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_package_paths(root, &path, paths)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_git_dir(repo_root: &Path) -> Option<PathBuf> {

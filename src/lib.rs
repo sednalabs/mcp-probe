@@ -14,6 +14,8 @@
 pub mod admission;
 pub mod allowlist;
 pub mod auth;
+#[cfg(test)]
+mod build_evidence;
 pub mod cli;
 pub mod guidance;
 pub mod help_text;

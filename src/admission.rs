@@ -9,6 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::provenance::RuntimeProvenance;
+use mcp_toolkit_provenance::UNKNOWN_VALUE;
 
 const CODE_DISABLED: &str = "admission.disabled";
 const CODE_OVERRIDE: &str = "admission.override.active";
@@ -219,8 +220,12 @@ pub fn evaluate_startup_admission(
         };
     }
 
-    if runtime.build.build_identity.trim().is_empty()
-        || runtime.build.source_fingerprint.trim().is_empty()
+    if runtime.build.source.dirty.is_none()
+        || !known_identity(&runtime.build.component)
+        || !known_identity(&runtime.build.server_version)
+        || !known_identity(&runtime.build.source.revision)
+        || !known_identity(&runtime.build.build_identity)
+        || !known_identity(&runtime.build.source_fingerprint)
     {
         return warning_or_reject(
             config.mode,
@@ -293,6 +298,18 @@ pub fn evaluate_startup_admission(
                 );
             }
         };
+        if !known_identity(&artifact.component)
+            || !known_identity(&artifact.build_identity)
+            || !known_identity(&artifact.source_fingerprint)
+        {
+            return warning_or_reject(
+                config.mode,
+                profile,
+                gate_path,
+                CODE_PROVENANCE_UNAVAILABLE,
+                "gate artifact contains unknown provenance identity".to_string(),
+            );
+        }
         if artifact.schema_version != 1 {
             return warning_or_reject(
                 config.mode,
@@ -512,6 +529,11 @@ fn is_json_artifact(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn known_identity(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && !value.eq_ignore_ascii_case(UNKNOWN_VALUE)
+}
+
 fn is_stale(gate_modified: SystemTime, exe_modified: SystemTime) -> bool {
     gate_modified < exe_modified
 }
@@ -521,21 +543,26 @@ mod tests {
     use super::*;
     use crate::provenance::capture_runtime_provenance;
     use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::io;
+    use tempfile::TempDir;
     use time::Duration;
 
-    fn temp_path(prefix: &str) -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("{prefix}-{nonce}"))
+    fn create_test_temp_dir(path: &Path) -> io::Result<()> {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(path)
     }
 
-    fn base_config(mode: StartupAdmissionMode) -> StartupAdmissionConfig {
+    fn base_config(mode: StartupAdmissionMode, temp_dir: &TempDir) -> StartupAdmissionConfig {
         StartupAdmissionConfig {
             mode,
             required_profile: TestGateProfile::Fast,
-            fast_gate_artifact_path: temp_path("mcp-probe-fast-gate").join("fast.json"),
-            standard_gate_artifact_path: temp_path("mcp-probe-standard-gate").join("standard.json"),
+            fast_gate_artifact_path: temp_dir.path().join("fast.json"),
+            standard_gate_artifact_path: temp_dir.path().join("standard.json"),
             bypass: false,
             bypass_reason: None,
             bypass_ttl_s: None,
@@ -545,9 +572,6 @@ mod tests {
     }
 
     fn write_gate_json(path: &Path, runtime: &RuntimeProvenance, status: &str, expires_at: &str) {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
         let payload = serde_json::json!({
             "schema_version": 1,
             "component": runtime.build.component,
@@ -562,31 +586,105 @@ mod tests {
     }
 
     #[test]
+    fn temp_dir_creation_does_not_adopt_an_existing_path() {
+        let temp = TempDir::new().expect("create private test directory");
+        let occupied = temp.path().join("occupied");
+        fs::create_dir(&occupied).expect("create occupied directory");
+        let sentinel = occupied.join("sentinel.json");
+        fs::write(&sentinel, "preserve").expect("write sentinel");
+
+        let error = create_test_temp_dir(&occupied).expect_err("existing path must not be adopted");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(sentinel).expect("read sentinel"),
+            "preserve"
+        );
+    }
+
+    #[test]
     fn admission_warn_mode_allows_missing_gate() {
-        let config = base_config(StartupAdmissionMode::Warn);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Warn, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Warning);
-        let _ = fs::remove_file(exe);
     }
 
     #[test]
     fn admission_strict_rejects_missing_gate() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Rejected);
-        let _ = fs::remove_file(exe);
+    }
+
+    #[test]
+    fn strict_admission_rejects_unknown_runtime_provenance_before_gate_match() {
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
+        fs::write(&exe, "bin").expect("write exe");
+        let mut runtime = capture_runtime_provenance(&exe);
+        runtime.build.source.dirty = None;
+        runtime.build.source.revision = UNKNOWN_VALUE.to_string();
+        runtime.build.build_identity = UNKNOWN_VALUE.to_string();
+        runtime.build.source_fingerprint = UNKNOWN_VALUE.to_string();
+        write_gate_json(
+            &config.fast_gate_artifact_path,
+            &runtime,
+            "pass",
+            "2099-01-01T00:00:00Z",
+        );
+
+        let result = evaluate_startup_admission(&config, &exe, &runtime);
+        assert_eq!(result.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some(CODE_PROVENANCE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn strict_admission_rejects_gate_artifact_with_unknown_identity_values() {
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
+        fs::write(&exe, "bin").expect("write exe");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let runtime = capture_runtime_provenance(&exe);
+        let expires = (OffsetDateTime::now_utc() + Duration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expires");
+        write_gate_json(&config.fast_gate_artifact_path, &runtime, "pass", &expires);
+        let mut artifact: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config.fast_gate_artifact_path).expect("read gate"))
+                .expect("parse gate");
+        artifact["build_identity"] = serde_json::json!(UNKNOWN_VALUE);
+        artifact["source_fingerprint"] = serde_json::json!(UNKNOWN_VALUE);
+        fs::write(
+            &config.fast_gate_artifact_path,
+            serde_json::to_vec(&artifact).expect("serialize gate"),
+        )
+        .expect("replace gate identity");
+
+        let result = evaluate_startup_admission(&config, &exe, &runtime);
+        assert_eq!(result.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some(CODE_PROVENANCE_UNAVAILABLE)
+        );
     }
 
     #[test]
     fn admission_strict_passes_with_valid_gate_json() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         std::thread::sleep(std::time::Duration::from_millis(25));
         let runtime = capture_runtime_provenance(&exe);
@@ -596,14 +694,13 @@ mod tests {
         write_gate_json(&config.fast_gate_artifact_path, &runtime, "pass", &expires);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Passed);
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 
     #[test]
     fn admission_strict_rejects_stale_gate() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TempDir::new().expect("create private test directory");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let expires = (OffsetDateTime::now_utc() + Duration::hours(1))
@@ -616,8 +713,5 @@ mod tests {
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Rejected);
         assert_eq!(result.reason_code.as_deref(), Some(CODE_EXPIRED));
-
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 }

@@ -33,7 +33,7 @@ use crate::transport::TransportType;
 use crate::version::SERVER_NAME;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -538,9 +538,9 @@ async fn resolve_auth_headers(
 
 fn build_result(text: String, structured: Value, is_error: bool) -> CallToolResult {
     let mut result = if is_error {
-        CallToolResult::error(vec![Content::text(text)])
+        CallToolResult::error(vec![ContentBlock::text(text)])
     } else {
-        CallToolResult::success(vec![Content::text(text)])
+        CallToolResult::success(vec![ContentBlock::text(text)])
     };
     result.structured_content = Some(structured);
     result
