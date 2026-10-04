@@ -34,10 +34,9 @@ use crate::report::{
 };
 use crate::transport::TransportType;
 use anyhow::anyhow;
-use mcp_toolkit_core::rmcp_models;
 use rmcp::model::{
     ClientRequest, CustomRequest, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PingRequest,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, PingRequest,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -371,11 +370,9 @@ async fn list_all_tool_pages(
         let result = timing::with_retry(
             || {
                 timing::with_timeout(
-                    connection
-                        .service
-                        .list_tools(Some(rmcp_models::paginated_request_params(
-                            cursor_for_request.clone(),
-                        ))),
+                    connection.service.list_tools(Some(
+                        PaginatedRequestParams::default().with_cursor(cursor_for_request.clone()),
+                    )),
                     probe_options.timeout_ms,
                     "tools.list",
                 )
@@ -449,21 +446,20 @@ async fn list_all_resource_pages(
 
     loop {
         let cursor_for_request = cursor.clone();
-        let result =
-            timing::with_retry(
-                || {
-                    timing::with_timeout(
-                        connection.service.list_resources(Some(
-                            rmcp_models::paginated_request_params(cursor_for_request.clone()),
-                        )),
-                        probe_options.timeout_ms,
-                        "resources.list",
-                    )
-                },
-                probe_options.retries,
-                probe_options.retry_delay_ms,
-            )
-            .await?;
+        let result = timing::with_retry(
+            || {
+                timing::with_timeout(
+                    connection.service.list_resources(Some(
+                        PaginatedRequestParams::default().with_cursor(cursor_for_request.clone()),
+                    )),
+                    probe_options.timeout_ms,
+                    "resources.list",
+                )
+            },
+            probe_options.retries,
+            probe_options.retry_delay_ms,
+        )
+        .await?;
 
         page_count += 1;
         let page_resource_uris: Vec<String> = result
@@ -533,7 +529,7 @@ async fn list_all_resource_template_pages(
             || {
                 timing::with_timeout(
                     connection.service.list_resource_templates(Some(
-                        rmcp_models::paginated_request_params(cursor_for_request.clone()),
+                        PaginatedRequestParams::default().with_cursor(cursor_for_request.clone()),
                     )),
                     probe_options.timeout_ms,
                     "resources.templates.list",
@@ -608,21 +604,20 @@ async fn list_all_prompt_pages(
 
     loop {
         let cursor_for_request = cursor.clone();
-        let result =
-            timing::with_retry(
-                || {
-                    timing::with_timeout(
-                        connection.service.list_prompts(Some(
-                            rmcp_models::paginated_request_params(cursor_for_request.clone()),
-                        )),
-                        probe_options.timeout_ms,
-                        "prompts.list",
-                    )
-                },
-                probe_options.retries,
-                probe_options.retry_delay_ms,
-            )
-            .await?;
+        let result = timing::with_retry(
+            || {
+                timing::with_timeout(
+                    connection.service.list_prompts(Some(
+                        PaginatedRequestParams::default().with_cursor(cursor_for_request.clone()),
+                    )),
+                    probe_options.timeout_ms,
+                    "prompts.list",
+                )
+            },
+            probe_options.retries,
+            probe_options.retry_delay_ms,
+        )
+        .await?;
 
         page_count += 1;
         let page_prompt_names: Vec<String> = result

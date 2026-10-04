@@ -892,6 +892,10 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 #[cfg(test)]
 mod tests {
     use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
+    use rmcp::transport::auth::AuthorizationManager;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn registration_endpoint_expectation_accepts_present_endpoint() {
@@ -917,5 +921,76 @@ mod tests {
         assert_eq!(url.host_str(), Some("[::1]"));
         assert_eq!(url.port(), Some(3333));
         assert_eq!(url.path(), "/oauth/callback");
+    }
+
+    #[tokio::test]
+    async fn oauth_metadata_rejects_private_authorization_server() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local OAuth metadata fixture");
+        let address = listener.local_addr().expect("read fixture address");
+        let server_url = format!("http://{address}/mcp");
+        let resource_metadata_url =
+            format!("http://{address}/.well-known/oauth-protected-resource");
+        let server_url_for_metadata = server_url.clone();
+
+        let fixture = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            let (mut request, _) = listener.accept().await.expect("accept server request");
+            let mut bytes = vec![0; 4096];
+            let count = request.read(&mut bytes).await.expect("read server request");
+            requests.push(String::from_utf8_lossy(&bytes[..count]).into_owned());
+            let challenge = format!(
+                "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer resource_metadata=\"{resource_metadata_url}\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            request
+                .write_all(challenge.as_bytes())
+                .await
+                .expect("write resource-metadata challenge");
+
+            let (mut request, _) = timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .expect("resource-metadata request should arrive")
+                .expect("accept resource-metadata request");
+            let mut bytes = vec![0; 4096];
+            let count = request
+                .read(&mut bytes)
+                .await
+                .expect("read resource-metadata request");
+            requests.push(String::from_utf8_lossy(&bytes[..count]).into_owned());
+            let payload = serde_json::json!({
+                "resource": server_url_for_metadata,
+                "authorization_servers": ["http://169.254.169.254/latest/meta-data"]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            request
+                .write_all(response.as_bytes())
+                .await
+                .expect("write resource metadata");
+            requests
+        });
+
+        let manager = AuthorizationManager::new(server_url)
+            .await
+            .expect("construct OAuth manager");
+        let result = timeout(Duration::from_secs(2), manager.discover_metadata())
+            .await
+            .expect("metadata discovery should terminate");
+        assert!(
+            result.is_err(),
+            "private authorization server must be rejected"
+        );
+        let requests = fixture.await.expect("finish local metadata fixture");
+        assert_eq!(
+            requests.len(),
+            2,
+            "no private authorization-server request is made"
+        );
+        assert!(requests[0].starts_with("GET /mcp "));
+        assert!(requests[1].starts_with("GET /.well-known/oauth-protected-resource "));
     }
 }

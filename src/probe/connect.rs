@@ -4,7 +4,6 @@ use crate::trace::TraceCollector;
 use crate::transport::TransportType;
 use crate::version::{latest_protocol_version, MCP_PROTOCOL_VERSION};
 use anyhow::{anyhow, Context, Result};
-use mcp_toolkit_core::rmcp_models;
 use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
 use rmcp::service::{serve_client, RoleClient, RunningService};
 use rmcp::transport::{
@@ -85,11 +84,11 @@ impl std::error::Error for ProbeConnectError {
 }
 
 fn build_client_info(name: &str, version: &str, _transport_type: TransportType) -> ClientInfo {
-    rmcp_models::client_info(
-        latest_protocol_version(),
+    ClientInfo::new(
         ClientCapabilities::default(),
         Implementation::new(name, version),
     )
+    .with_protocol_version(latest_protocol_version())
 }
 
 fn trace_value<T: Serialize>(value: &T) -> serde_json::Value {
@@ -219,20 +218,18 @@ fn build_streamable_http_transport(
     headers: Option<&HashMap<String, String>>,
 ) -> Result<StreamableHttpClientTransport<reqwest::Client>> {
     let header_map = build_header_map(headers);
-    let client = if header_map.is_empty() {
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .context("failed to build HTTP client")?
-    } else {
-        reqwest::Client::builder()
-            .default_headers(header_map)
-            .no_proxy()
-            .build()
-            .context("failed to build HTTP client")?
-    };
+    let client = build_http_client(header_map)?;
     let config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
     Ok(StreamableHttpClientTransport::with_client(client, config))
+}
+
+fn build_http_client(header_map: reqwest::header::HeaderMap) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .default_headers(header_map)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("failed to build HTTP client")
 }
 
 /// Connect to the target transport and return a running MCP client.
@@ -356,5 +353,67 @@ pub fn connect_error(
         error,
         stdio: stdio_snapshot,
         trace: trace_entries,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_header_map, build_http_client};
+    use std::collections::HashMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn streamable_http_client_does_not_forward_default_headers_on_redirect() {
+        let origin = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect origin");
+        let origin_url = format!("http://{}/mcp", origin.local_addr().unwrap());
+        let target = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect target");
+        let target_url = format!("http://{}/sink", target.local_addr().unwrap());
+        let (origin_request_tx, origin_request_rx) = oneshot::channel();
+        let target_task = tokio::spawn(async move { target.accept().await });
+
+        tokio::spawn(async move {
+            let (mut stream, _) = origin.accept().await.expect("accept origin request");
+            let mut request = vec![0; 4096];
+            let count = stream
+                .read(&mut request)
+                .await
+                .expect("read origin request");
+            origin_request_tx
+                .send(String::from_utf8_lossy(&request[..count]).into_owned())
+                .expect("send captured request");
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write redirect response");
+        });
+
+        let mut headers = HashMap::new();
+        headers.insert("x-probe-secret".to_string(), "origin-only".to_string());
+        let client = build_http_client(build_header_map(Some(&headers)));
+        let response = client
+            .expect("build configured HTTP client")
+            .get(&origin_url)
+            .send()
+            .await
+            .expect("receive redirect response");
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        let origin_request = origin_request_rx.await.expect("capture origin request");
+        assert!(origin_request
+            .to_ascii_lowercase()
+            .contains("x-probe-secret: origin-only"));
+        assert!(timeout(Duration::from_millis(250), target_task)
+            .await
+            .is_err());
     }
 }

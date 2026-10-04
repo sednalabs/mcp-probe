@@ -4,7 +4,6 @@ use crate::logging::{stderr_logger, LogLevel};
 use crate::provenance::{RuntimeAdmissionExtension, RuntimeProvenance};
 use crate::server::resources::{list_resources, read_resource};
 use crate::version::{latest_protocol_version, SERVER_NAME};
-use mcp_toolkit_core::rmcp_models;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
@@ -74,15 +73,15 @@ impl ProbeMcp {
 
 impl ServerHandler for ProbeMcp {
     fn get_info(&self) -> ServerInfo {
-        rmcp_models::server_info(
-            latest_protocol_version(),
-            self.capabilities(),
-            Implementation::new(SERVER_NAME, self.provenance.build.server_version.clone()),
-            Some(
-                "Headless MCP probe server. Use probe_run, probe_handshake, or probe_help to validate MCP servers."
-                    .to_string(),
-            ),
-        )
+        ServerInfo::new(self.capabilities())
+            .with_protocol_version(latest_protocol_version())
+            .with_server_info(Implementation::new(
+                SERVER_NAME,
+                self.provenance.build.server_version.clone(),
+            ))
+            .with_instructions(
+                "Headless MCP probe server. Use probe_run, probe_handshake, or probe_help to validate MCP servers.",
+            )
     }
 
     fn initialize(

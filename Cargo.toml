@@ -17,7 +17,7 @@ clap = { version = "4.5.46", features = ["derive"] }
 futures-util = "0.3.31"
 oauth2 = "5.0.0"
 reqwest = { version = "0.13.2", default-features = true, features = ["json", "stream"] }
-rmcp = { version = "1.1.0", features = ["client", "server", "macros", "schemars", "auth", "transport-child-process", "transport-io", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "2.1.0", features = ["client", "server", "macros", "schemars", "auth", "transport-child-process", "transport-io", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
 schemars = "1.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -27,7 +27,6 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "fs", "io
 url = "2.5.4"
 
 mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
-mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
 mcp-toolkit-provenance = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "f7978023c5502ce7fa22ca898f4d4bca9ff2eb27" }
 
 [dev-dependencies]

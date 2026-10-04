@@ -3,7 +3,6 @@
 use crate::provenance::{build_attestation_envelope, RuntimeAdmissionExtension, RuntimeProvenance};
 use crate::report::now_iso;
 use crate::version::SERVER_NAME;
-use mcp_toolkit_core::rmcp_models;
 use rmcp::model::{RawResource, ReadResourceResult, Resource, ResourceContents};
 use serde_json::Value;
 
@@ -139,7 +138,7 @@ pub fn read_resource(
         LOGGING_SCHEMA_URI => {
             let payload = logging_schema();
             let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-            Ok(rmcp_models::read_resource_result(vec![
+            Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: LOGGING_SCHEMA_URI.to_string(),
                     mime_type: Some("application/json".to_string()),
@@ -158,7 +157,7 @@ pub fn read_resource(
                 "startup_admission": runtime_admission,
             });
             let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-            Ok(rmcp_models::read_resource_result(vec![
+            Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: STATUS_URI.to_string(),
                     mime_type: Some("application/json".to_string()),
@@ -170,7 +169,7 @@ pub fn read_resource(
         ATTEST_URI => {
             let payload = build_attestation_envelope(provenance, runtime_admission);
             let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-            Ok(rmcp_models::read_resource_result(vec![
+            Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: ATTEST_URI.to_string(),
                     mime_type: Some("application/json".to_string()),

@@ -1,6 +1,8 @@
 //! Validates build-time Git evidence before it becomes provenance input.
 
+#[cfg(not(test))]
 use std::path::Path;
+#[cfg(not(test))]
 use std::process::Command;
 
 /// Parse `git status --porcelain=v1` output into a trustworthy dirty state.
@@ -24,6 +26,7 @@ pub fn parse_porcelain_status(bytes: &[u8]) -> Option<bool> {
 }
 
 /// Read full nonignored worktree status; command errors are unknown.
+#[cfg(not(test))]
 pub fn git_dirty_status(repo_root: &Path) -> Option<bool> {
     let output = Command::new("git")
         .arg("-C")
