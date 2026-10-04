@@ -8,10 +8,14 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, LoggingLevel, LoggingMessageNotificationParam,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-    ServerInfo, SetLevelRequestParams,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
+    ReadResourceResult, ServerCapabilities, ServerInfo,
 };
+// MCP logging remains part of this server's existing wire contract. RMCP 2.1
+// deprecates the legacy logging types but still exposes no equivalent logging
+// method; keep the compatibility allowances narrowly attached to its uses.
+#[allow(deprecated)]
+use rmcp::model::{LoggingLevel, LoggingMessageNotificationParam, SetLevelRequestParams};
 use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{RoleServer, ServerHandler};
 use serde_json::Value;
@@ -55,6 +59,7 @@ impl ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn capabilities(&self) -> ServerCapabilities {
         if self.log_state.is_some() {
             ServerCapabilities::builder()
@@ -84,6 +89,7 @@ impl ServerHandler for ProbeMcp {
             )
     }
 
+    #[allow(deprecated)]
     fn initialize(
         &self,
         request: rmcp::model::InitializeRequestParams,
@@ -120,6 +126,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn on_initialized(
         &self,
         context: NotificationContext<RoleServer>,
@@ -134,6 +141,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn set_level(
         &self,
         request: SetLevelRequestParams,
@@ -162,6 +170,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -208,6 +217,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -302,6 +312,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -351,6 +362,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -400,6 +412,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -446,6 +459,7 @@ impl ServerHandler for ProbeMcp {
         }
     }
 
+    #[allow(deprecated)]
     fn read_resource(
         &self,
         request: ReadResourceRequestParams,
@@ -622,6 +636,7 @@ impl TokenBucket {
     }
 }
 
+#[allow(deprecated)]
 struct McpLogState {
     level: Mutex<LoggingLevel>,
     bucket: Mutex<TokenBucket>,
@@ -629,6 +644,7 @@ struct McpLogState {
 }
 
 impl McpLogState {
+    #[allow(deprecated)]
     fn new(
         level: LogLevel,
         rate_limit_per_second: f64,
@@ -648,12 +664,14 @@ impl McpLogState {
         }
     }
 
+    #[allow(deprecated)]
     fn set_level(&self, level: LoggingLevel) {
         if let Ok(mut guard) = self.level.lock() {
             *guard = level;
         }
     }
 
+    #[allow(deprecated)]
     fn level_value(level: LoggingLevel) -> u8 {
         match level {
             LoggingLevel::Debug => 10,
@@ -667,6 +685,7 @@ impl McpLogState {
         }
     }
 
+    #[allow(deprecated)]
     fn allowed_by_level(&self, level: LoggingLevel) -> bool {
         let Ok(guard) = self.level.lock() else {
             return true;
@@ -674,6 +693,7 @@ impl McpLogState {
         Self::level_value(level) >= Self::level_value(*guard)
     }
 
+    #[allow(deprecated)]
     fn should_rate_limit(&self, level: LoggingLevel) -> bool {
         Self::level_value(level) < Self::level_value(LoggingLevel::Error)
     }
@@ -685,6 +705,7 @@ impl McpLogState {
         bucket.consume(1.0)
     }
 
+    #[allow(deprecated)]
     async fn emit(
         &self,
         peer: &rmcp::service::Peer<RoleServer>,
@@ -701,11 +722,10 @@ impl McpLogState {
         }
         let payload = sanitize_log_payload(event, data, request_id);
         let _ = peer
-            .notify_logging_message(LoggingMessageNotificationParam {
-                level,
-                logger: Some(MCP_LOGGER_NAME.to_string()),
-                data: payload.clone(),
-            })
+            .notify_logging_message(
+                LoggingMessageNotificationParam::new(level, payload.clone())
+                    .with_logger(MCP_LOGGER_NAME),
+            )
             .await;
 
         if let Some(logger) = &self.client_logger {
@@ -726,10 +746,7 @@ fn extract_error_message(result: &CallToolResult) -> Option<String> {
     result
         .content
         .iter()
-        .find_map(|content| match &content.raw {
-            rmcp::model::RawContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
+        .find_map(|content| content.as_text().map(|text| text.text.clone()))
 }
 
 fn sanitize_log_payload(event: &str, data: Option<Value>, request_id: Option<&str>) -> Value {

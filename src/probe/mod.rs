@@ -811,7 +811,7 @@ pub async fn run_probe(
         }
     };
 
-    let peer_info = connection.service.peer_info().cloned();
+    let peer_info = connection.service.peer_info();
     let server_info_value = peer_info
         .as_ref()
         .and_then(|info| serde_json::to_value(&info.server_info).ok());
@@ -1371,7 +1371,7 @@ pub async fn run_probe_handshake(
         }
     };
 
-    let peer_info = connection.service.peer_info().cloned();
+    let peer_info = connection.service.peer_info();
     let server_info_value = peer_info
         .as_ref()
         .and_then(|info| serde_json::to_value(&info.server_info).ok());
@@ -1807,7 +1807,7 @@ pub async fn run_raw_request(
         }
     };
 
-    let peer_info = connection.service.peer_info().cloned();
+    let peer_info = connection.service.peer_info();
     let server_info_value = peer_info
         .as_ref()
         .and_then(|info| serde_json::to_value(&info.server_info).ok());

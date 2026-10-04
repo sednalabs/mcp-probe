@@ -892,7 +892,7 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 #[cfg(test)]
 mod tests {
     use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
-    use oauth2::HttpResponse;
+    use oauth2::http::Response;
     use rmcp::transport::auth::{
         AuthorizationManager, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
         OAuthHttpRequest,
@@ -956,7 +956,7 @@ mod tests {
     async fn oauth_metadata_rejects_private_authorization_server() {
         let server_url = "http://probe.example/mcp";
         let resource_metadata_url = "http://probe.example/.well-known/oauth-protected-resource";
-        let unauthorized = HttpResponse::builder()
+        let unauthorized = Response::builder()
             .status(401)
             .header(
                 "www-authenticate",
@@ -968,7 +968,7 @@ mod tests {
             "resource": server_url,
             "authorization_servers": ["http://169.254.169.254/latest/meta-data"]
         });
-        let metadata = HttpResponse::builder()
+        let metadata = Response::builder()
             .status(200)
             .header("content-type", "application/json")
             .body(serde_json::to_vec(&metadata).expect("serialize controlled metadata"))

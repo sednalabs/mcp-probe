@@ -3,7 +3,7 @@
 use crate::provenance::{build_attestation_envelope, RuntimeAdmissionExtension, RuntimeProvenance};
 use crate::report::now_iso;
 use crate::version::SERVER_NAME;
-use rmcp::model::{RawResource, ReadResourceResult, Resource, ResourceContents};
+use rmcp::model::{ReadResourceResult, Resource, ResourceContents};
 use serde_json::Value;
 
 pub const LOGGING_SCHEMA_URI: &str = "mcp-probe://logging/schema";
@@ -82,47 +82,24 @@ fn logging_schema() -> Value {
 }
 
 fn logging_resource() -> Resource {
-    let raw = RawResource {
-        uri: LOGGING_SCHEMA_URI.to_string(),
-        name: "logging-schema".to_string(),
-        title: Some("MCP logging schema".to_string()),
-        description: Some(
-            "Event names and payload shapes emitted via MCP logging notifications.".to_string(),
-        ),
-        mime_type: Some("application/json".to_string()),
-        size: None,
-        icons: None,
-        meta: None,
-    };
-    Resource::new(raw, None)
+    Resource::new(LOGGING_SCHEMA_URI, "logging-schema")
+        .with_title("MCP logging schema")
+        .with_description("Event names and payload shapes emitted via MCP logging notifications.")
+        .with_mime_type("application/json")
 }
 
 fn status_resource() -> Resource {
-    let raw = RawResource {
-        uri: STATUS_URI.to_string(),
-        name: "status".to_string(),
-        title: Some("Status".to_string()),
-        description: Some("Probe server status and runtime provenance (JSON).".to_string()),
-        mime_type: Some("application/json".to_string()),
-        size: None,
-        icons: None,
-        meta: None,
-    };
-    Resource::new(raw, None)
+    Resource::new(STATUS_URI, "status")
+        .with_title("Status")
+        .with_description("Probe server status and runtime provenance (JSON).")
+        .with_mime_type("application/json")
 }
 
 fn attest_resource() -> Resource {
-    let raw = RawResource {
-        uri: ATTEST_URI.to_string(),
-        name: "attest".to_string(),
-        title: Some("Build attestation".to_string()),
-        description: Some("Fleet v2 attestation envelope for this running probe.".to_string()),
-        mime_type: Some("application/json".to_string()),
-        size: None,
-        icons: None,
-        meta: None,
-    };
-    Resource::new(raw, None)
+    Resource::new(ATTEST_URI, "attest")
+        .with_title("Build attestation")
+        .with_description("Fleet v2 attestation envelope for this running probe.")
+        .with_mime_type("application/json")
 }
 
 pub fn list_resources() -> Vec<Resource> {
@@ -217,9 +194,7 @@ mod tests {
     fn list_resources_includes_attest_uri() {
         let resources = list_resources();
         assert!(
-            resources
-                .iter()
-                .any(|resource| resource.raw.uri == ATTEST_URI),
+            resources.iter().any(|resource| resource.uri == ATTEST_URI),
             "attest resource URI should be listed"
         );
     }
