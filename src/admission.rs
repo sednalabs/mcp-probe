@@ -543,21 +543,59 @@ mod tests {
     use super::*;
     use crate::provenance::capture_runtime_provenance;
     use std::fs;
+    use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
     use time::Duration;
 
-    fn temp_path(prefix: &str) -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("{prefix}-{nonce}"))
+    struct TestTempDir {
+        path: PathBuf,
     }
 
-    fn base_config(mode: StartupAdmissionMode) -> StartupAdmissionConfig {
+    impl TestTempDir {
+        fn new(prefix: &str) -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(1);
+
+            for _ in 0..128 {
+                let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
+                let path =
+                    std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
+                match create_test_temp_dir(&path) {
+                    Ok(()) => return Self { path },
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create private test directory: {error}"),
+                }
+            }
+
+            panic!("could not reserve a unique test directory")
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn create_test_temp_dir(path: &Path) -> io::Result<()> {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(path)
+    }
+
+    fn base_config(mode: StartupAdmissionMode, temp_dir: &TestTempDir) -> StartupAdmissionConfig {
         StartupAdmissionConfig {
             mode,
             required_profile: TestGateProfile::Fast,
-            fast_gate_artifact_path: temp_path("mcp-probe-fast-gate").join("fast.json"),
-            standard_gate_artifact_path: temp_path("mcp-probe-standard-gate").join("standard.json"),
+            fast_gate_artifact_path: temp_dir.path().join("fast.json"),
+            standard_gate_artifact_path: temp_dir.path().join("standard.json"),
             bypass: false,
             bypass_reason: None,
             bypass_ttl_s: None,
@@ -567,9 +605,6 @@ mod tests {
     }
 
     fn write_gate_json(path: &Path, runtime: &RuntimeProvenance, status: &str, expires_at: &str) {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
         let payload = serde_json::json!({
             "schema_version": 1,
             "component": runtime.build.component,
@@ -584,31 +619,48 @@ mod tests {
     }
 
     #[test]
+    fn temp_dir_creation_does_not_adopt_an_existing_path() {
+        let temp = TestTempDir::new("mcp-probe-admission-collision");
+        let occupied = temp.path().join("occupied");
+        fs::create_dir(&occupied).expect("create occupied directory");
+        let sentinel = occupied.join("sentinel.json");
+        fs::write(&sentinel, "preserve").expect("write sentinel");
+
+        let error = create_test_temp_dir(&occupied).expect_err("existing path must not be adopted");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(sentinel).expect("read sentinel"),
+            "preserve"
+        );
+    }
+
+    #[test]
     fn admission_warn_mode_allows_missing_gate() {
-        let config = base_config(StartupAdmissionMode::Warn);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TestTempDir::new("mcp-probe-admission-warn");
+        let config = base_config(StartupAdmissionMode::Warn, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Warning);
-        let _ = fs::remove_file(exe);
     }
 
     #[test]
     fn admission_strict_rejects_missing_gate() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TestTempDir::new("mcp-probe-admission-missing");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Rejected);
-        let _ = fs::remove_file(exe);
     }
 
     #[test]
     fn strict_admission_rejects_unknown_runtime_provenance_before_gate_match() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe-unknown");
+        let temp = TestTempDir::new("mcp-probe-admission-unknown-runtime");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let mut runtime = capture_runtime_provenance(&exe);
         runtime.build.source.dirty = None;
@@ -628,14 +680,13 @@ mod tests {
             result.reason_code.as_deref(),
             Some(CODE_PROVENANCE_UNAVAILABLE)
         );
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 
     #[test]
     fn strict_admission_rejects_gate_artifact_with_unknown_identity_values() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe-known");
+        let temp = TestTempDir::new("mcp-probe-admission-unknown-gate");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         std::thread::sleep(std::time::Duration::from_millis(25));
         let runtime = capture_runtime_provenance(&exe);
@@ -660,14 +711,13 @@ mod tests {
             result.reason_code.as_deref(),
             Some(CODE_PROVENANCE_UNAVAILABLE)
         );
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 
     #[test]
     fn admission_strict_passes_with_valid_gate_json() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TestTempDir::new("mcp-probe-admission-valid");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         std::thread::sleep(std::time::Duration::from_millis(25));
         let runtime = capture_runtime_provenance(&exe);
@@ -677,14 +727,13 @@ mod tests {
         write_gate_json(&config.fast_gate_artifact_path, &runtime, "pass", &expires);
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Passed);
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 
     #[test]
     fn admission_strict_rejects_stale_gate() {
-        let config = base_config(StartupAdmissionMode::Strict);
-        let exe = temp_path("mcp-probe-exe");
+        let temp = TestTempDir::new("mcp-probe-admission-stale");
+        let config = base_config(StartupAdmissionMode::Strict, &temp);
+        let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
         let runtime = capture_runtime_provenance(&exe);
         let expires = (OffsetDateTime::now_utc() + Duration::hours(1))
@@ -697,8 +746,5 @@ mod tests {
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Rejected);
         assert_eq!(result.reason_code.as_deref(), Some(CODE_EXPIRED));
-
-        let _ = fs::remove_file(exe);
-        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 }
