@@ -85,3 +85,28 @@ fn collect_git_watch_paths_resolves_gitdir_files() {
     assert_eq!(actual, expected);
     fs::remove_dir_all(repo_root).expect("cleanup temp repo");
 }
+
+#[test]
+fn collect_package_watch_paths_includes_nested_inputs_and_skips_generated_trees() {
+    let repo_root = unique_temp_dir("package-tree");
+    write_file(&repo_root.join("src/lib.rs"), "pub fn example() {}\n");
+    write_file(
+        &repo_root.join("nested/module/input.rs"),
+        "pub fn nested() {}\n",
+    );
+    write_file(&repo_root.join(".git/config"), "generated metadata\n");
+    write_file(&repo_root.join("target/debug/output"), "generated output\n");
+
+    let actual = build_support::collect_package_watch_paths(&repo_root)
+        .expect("enumerate package inputs")
+        .into_iter()
+        .map(|path| path.strip_prefix(&repo_root).unwrap().to_path_buf())
+        .collect::<Vec<_>>();
+
+    assert!(actual.contains(&PathBuf::from("src/lib.rs")));
+    assert!(actual.contains(&PathBuf::from("nested/module/input.rs")));
+    assert!(actual.contains(&PathBuf::from("nested/module")));
+    assert!(!actual.iter().any(|path| path.starts_with(".git")));
+    assert!(!actual.iter().any(|path| path.starts_with("target")));
+    fs::remove_dir_all(repo_root).expect("cleanup temp repo");
+}

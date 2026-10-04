@@ -9,6 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::provenance::RuntimeProvenance;
+use mcp_toolkit_provenance::UNKNOWN_VALUE;
 
 const CODE_DISABLED: &str = "admission.disabled";
 const CODE_OVERRIDE: &str = "admission.override.active";
@@ -219,8 +220,12 @@ pub fn evaluate_startup_admission(
         };
     }
 
-    if runtime.build.build_identity.trim().is_empty()
-        || runtime.build.source_fingerprint.trim().is_empty()
+    if runtime.build.source.dirty.is_none()
+        || !known_identity(&runtime.build.component)
+        || !known_identity(&runtime.build.server_version)
+        || !known_identity(&runtime.build.source.revision)
+        || !known_identity(&runtime.build.build_identity)
+        || !known_identity(&runtime.build.source_fingerprint)
     {
         return warning_or_reject(
             config.mode,
@@ -293,6 +298,18 @@ pub fn evaluate_startup_admission(
                 );
             }
         };
+        if !known_identity(&artifact.component)
+            || !known_identity(&artifact.build_identity)
+            || !known_identity(&artifact.source_fingerprint)
+        {
+            return warning_or_reject(
+                config.mode,
+                profile,
+                gate_path,
+                CODE_PROVENANCE_UNAVAILABLE,
+                "gate artifact contains unknown provenance identity".to_string(),
+            );
+        }
         if artifact.schema_version != 1 {
             return warning_or_reject(
                 config.mode,
@@ -512,6 +529,11 @@ fn is_json_artifact(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn known_identity(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && !value.eq_ignore_ascii_case(UNKNOWN_VALUE)
+}
+
 fn is_stale(gate_modified: SystemTime, exe_modified: SystemTime) -> bool {
     gate_modified < exe_modified
 }
@@ -581,6 +603,65 @@ mod tests {
         let result = evaluate_startup_admission(&config, &exe, &runtime);
         assert_eq!(result.outcome, AdmissionOutcome::Rejected);
         let _ = fs::remove_file(exe);
+    }
+
+    #[test]
+    fn strict_admission_rejects_unknown_runtime_provenance_before_gate_match() {
+        let config = base_config(StartupAdmissionMode::Strict);
+        let exe = temp_path("mcp-probe-exe-unknown");
+        fs::write(&exe, "bin").expect("write exe");
+        let mut runtime = capture_runtime_provenance(&exe);
+        runtime.build.source.dirty = None;
+        runtime.build.source.revision = UNKNOWN_VALUE.to_string();
+        runtime.build.build_identity = UNKNOWN_VALUE.to_string();
+        runtime.build.source_fingerprint = UNKNOWN_VALUE.to_string();
+        write_gate_json(
+            &config.fast_gate_artifact_path,
+            &runtime,
+            "pass",
+            "2099-01-01T00:00:00Z",
+        );
+
+        let result = evaluate_startup_admission(&config, &exe, &runtime);
+        assert_eq!(result.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some(CODE_PROVENANCE_UNAVAILABLE)
+        );
+        let _ = fs::remove_file(exe);
+        let _ = fs::remove_file(&config.fast_gate_artifact_path);
+    }
+
+    #[test]
+    fn strict_admission_rejects_gate_artifact_with_unknown_identity_values() {
+        let config = base_config(StartupAdmissionMode::Strict);
+        let exe = temp_path("mcp-probe-exe-known");
+        fs::write(&exe, "bin").expect("write exe");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let runtime = capture_runtime_provenance(&exe);
+        let expires = (OffsetDateTime::now_utc() + Duration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expires");
+        write_gate_json(&config.fast_gate_artifact_path, &runtime, "pass", &expires);
+        let mut artifact: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config.fast_gate_artifact_path).expect("read gate"))
+                .expect("parse gate");
+        artifact["build_identity"] = serde_json::json!(UNKNOWN_VALUE);
+        artifact["source_fingerprint"] = serde_json::json!(UNKNOWN_VALUE);
+        fs::write(
+            &config.fast_gate_artifact_path,
+            serde_json::to_vec(&artifact).expect("serialize gate"),
+        )
+        .expect("replace gate identity");
+
+        let result = evaluate_startup_admission(&config, &exe, &runtime);
+        assert_eq!(result.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            result.reason_code.as_deref(),
+            Some(CODE_PROVENANCE_UNAVAILABLE)
+        );
+        let _ = fs::remove_file(exe);
+        let _ = fs::remove_file(&config.fast_gate_artifact_path);
     }
 
     #[test]

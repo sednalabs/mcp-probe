@@ -1,3 +1,5 @@
+#[path = "src/build_evidence.rs"]
+mod build_evidence;
 mod build_support;
 
 use std::env;
@@ -17,6 +19,8 @@ fn main() {
         "MCP_BUILD_GIT_SHA",
         "MCP_BUILD_GIT_REF",
         "MCP_BUILD_GIT_DIRTY",
+        "MCP_BUILD_PROFILE",
+        "MCP_BUILD_TARGET",
         "MCP_BUILD_TOOLCHAIN",
         "MCP_BUILD_SOURCE_DATE_EPOCH",
         "MCP_BUILD_IDENTITY_OVERRIDE",
@@ -26,6 +30,8 @@ fn main() {
         "MCP_PROBE_BUILD_GIT_SHA",
         "MCP_PROBE_BUILD_GIT_REF",
         "MCP_PROBE_BUILD_GIT_DIRTY",
+        "MCP_PROBE_BUILD_PROFILE",
+        "MCP_PROBE_BUILD_TARGET",
         "MCP_PROBE_BUILD_TOOLCHAIN",
         "MCP_PROBE_BUILD_SOURCE_DATE_EPOCH",
         "MCP_PROBE_BUILD_IDENTITY_OVERRIDE",
@@ -45,6 +51,14 @@ fn main() {
     let explicit_server_version =
         env_any(&["MCP_PROBE_BUILD_SERVER_VERSION", "MCP_BUILD_SERVER_VERSION"]);
     let explicit_git_sha = env_any(&["MCP_PROBE_BUILD_GIT_SHA", "MCP_BUILD_GIT_SHA"]);
+    let git_sha = explicit_git_sha
+        .clone()
+        .or_else(|| git_output(&manifest_dir, &["rev-parse", "--verify", "HEAD"]));
+    let explicit_dirty = env_any(&["MCP_PROBE_BUILD_GIT_DIRTY", "MCP_BUILD_GIT_DIRTY"]);
+    let dirty = build_evidence::resolve_dirty_status(
+        build_evidence::git_dirty_status(&manifest_dir),
+        explicit_dirty.as_deref(),
+    );
     if production_mode {
         if explicit_server_version.is_none() {
             panic!(
@@ -67,10 +81,7 @@ fn main() {
         "MCP_PROBE_BUILD_SERVER_VERSION",
         explicit_server_version.or_else(|| env::var("CARGO_PKG_VERSION").ok()),
     );
-    emit_env(
-        "MCP_PROBE_BUILD_GIT_SHA",
-        explicit_git_sha.or_else(|| git_output(&manifest_dir, &["rev-parse", "--verify", "HEAD"])),
-    );
+    emit_env("MCP_PROBE_BUILD_GIT_SHA", git_sha.clone());
     emit_env(
         "MCP_PROBE_BUILD_GIT_REF",
         env_any(&["MCP_PROBE_BUILD_GIT_REF", "MCP_BUILD_GIT_REF"]).or_else(|| {
@@ -82,13 +93,7 @@ fn main() {
     );
     emit_env(
         "MCP_PROBE_BUILD_GIT_DIRTY",
-        env_any(&["MCP_PROBE_BUILD_GIT_DIRTY", "MCP_BUILD_GIT_DIRTY"]).or_else(|| {
-            git_output(
-                &manifest_dir,
-                &["status", "--porcelain", "--untracked-files=no"],
-            )
-            .map(|value| (!value.trim().is_empty()).to_string())
-        }),
+        dirty.map(|value| value.to_string()),
     );
     emit_env(
         "MCP_PROBE_BUILD_RUSTC_VERSION",
@@ -114,10 +119,14 @@ fn main() {
     );
     emit_env(
         "MCP_PROBE_BUILD_IDENTITY_OVERRIDE",
-        env_any(&[
-            "MCP_PROBE_BUILD_IDENTITY_OVERRIDE",
-            "MCP_BUILD_IDENTITY_OVERRIDE",
-        ]),
+        if git_sha.is_some() && dirty.is_some() {
+            env_any(&[
+                "MCP_PROBE_BUILD_IDENTITY_OVERRIDE",
+                "MCP_BUILD_IDENTITY_OVERRIDE",
+            ])
+        } else {
+            None
+        },
     );
 }
 
@@ -181,6 +190,11 @@ fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
 
 fn configure_git_rerun_inputs(repo_root: &Path) {
     for path in build_support::collect_git_watch_paths(repo_root) {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    for path in build_support::collect_package_watch_paths(repo_root)
+        .unwrap_or_else(|error| panic!("failed to enumerate package build inputs: {error}"))
+    {
         println!("cargo:rerun-if-changed={}", path.display());
     }
 }

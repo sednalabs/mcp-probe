@@ -2,7 +2,7 @@
 name = "mcp-probe"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.99"
 license = "Apache-2.0"
 description = "Headless MCP probe for validating server connectivity, discovery, and descriptor compatibility."
 repository = "https://github.com/sednalabs/mcp-probe"
@@ -28,6 +28,7 @@ url = "2.5.4"
 
 mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
 mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "44913ed1dd97900e68f476b42a058c2a874cd9b2" }
+mcp-toolkit-provenance = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs.git", rev = "f7978023c5502ce7fa22ca898f4d4bca9ff2eb27" }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
