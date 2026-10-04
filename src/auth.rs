@@ -930,6 +930,7 @@ mod tests {
     struct RecordingOAuthHttpClient {
         responses: Mutex<VecDeque<HttpResponse>>,
         destinations: Mutex<Vec<String>>,
+        allowed_destinations: Vec<String>,
     }
 
     impl OAuthHttpClient for RecordingOAuthHttpClient {
@@ -938,8 +939,12 @@ mod tests {
             self.destinations
                 .lock()
                 .expect("destination lock")
-                .push(destination);
-            let response = self.responses.lock().expect("response lock").pop_front();
+                .push(destination.clone());
+            let response = if self.allowed_destinations.contains(&destination) {
+                self.responses.lock().expect("response lock").pop_front()
+            } else {
+                None
+            };
 
             Box::pin(async move {
                 response.ok_or_else(|| OAuthHttpClientError::new("unexpected OAuth HTTP request"))
@@ -971,6 +976,14 @@ mod tests {
         let http_client = Arc::new(RecordingOAuthHttpClient {
             responses: Mutex::new(VecDeque::from([unauthorized, metadata])),
             destinations: Mutex::new(Vec::new()),
+            allowed_destinations: vec![
+                server_url.to_string(),
+                resource_metadata_url.to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server/mcp".to_string(),
+                "http://probe.example/.well-known/openid-configuration/mcp".to_string(),
+                "http://probe.example/mcp/.well-known/openid-configuration".to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server".to_string(),
+            ],
         });
         let manager =
             AuthorizationManager::new_with_oauth_http_client(server_url, http_client.clone())
@@ -989,12 +1002,17 @@ mod tests {
             .expect("destination lock")
             .clone();
         assert_eq!(
-            destinations.len(),
-            2,
-            "only the server and same-origin resource-metadata requests are made"
+            destinations,
+            vec![
+                server_url.to_string(),
+                resource_metadata_url.to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server/mcp".to_string(),
+                "http://probe.example/.well-known/openid-configuration/mcp".to_string(),
+                "http://probe.example/mcp/.well-known/openid-configuration".to_string(),
+                "http://probe.example/.well-known/oauth-authorization-server".to_string(),
+            ],
+            "only the expected same-origin discovery requests are made"
         );
-        assert_eq!(destinations[0], server_url);
-        assert_eq!(destinations[1], resource_metadata_url);
         assert!(destinations
             .iter()
             .all(|destination| !destination.contains("169.254.169.254")));
