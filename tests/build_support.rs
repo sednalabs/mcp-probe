@@ -3,18 +3,7 @@ mod build_support;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn unique_temp_dir(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "mcp-probe-build-support-{label}-{}-{nanos}",
-        std::process::id()
-    ))
-}
+use tempfile::TempDir;
 
 fn write_file(path: &PathBuf, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -25,7 +14,8 @@ fn write_file(path: &PathBuf, contents: &str) {
 
 #[test]
 fn collect_git_watch_paths_tracks_ref_and_index_inputs() {
-    let repo_root = unique_temp_dir("direct-gitdir");
+    let temp = TempDir::new().expect("create private test directory");
+    let repo_root = temp.path();
     let git_dir = repo_root.join(".git");
     write_file(&git_dir.join("HEAD"), "ref: refs/heads/main\n");
     write_file(&git_dir.join("packed-refs"), "");
@@ -51,12 +41,12 @@ fn collect_git_watch_paths_tracks_ref_and_index_inputs() {
     expected.sort();
 
     assert_eq!(actual, expected);
-    fs::remove_dir_all(repo_root).expect("cleanup temp repo");
 }
 
 #[test]
 fn collect_git_watch_paths_resolves_gitdir_files() {
-    let repo_root = unique_temp_dir("gitdir-file");
+    let temp = TempDir::new().expect("create private test directory");
+    let repo_root = temp.path();
     let actual_git_dir = repo_root.join("git-storage");
     write_file(&repo_root.join(".git"), "gitdir: git-storage\n");
     write_file(&actual_git_dir.join("HEAD"), "ref: refs/heads/work\n");
@@ -83,12 +73,12 @@ fn collect_git_watch_paths_resolves_gitdir_files() {
     expected.sort();
 
     assert_eq!(actual, expected);
-    fs::remove_dir_all(repo_root).expect("cleanup temp repo");
 }
 
 #[test]
 fn collect_package_watch_paths_includes_nested_inputs_and_skips_generated_trees() {
-    let repo_root = unique_temp_dir("package-tree");
+    let temp = TempDir::new().expect("create private test directory");
+    let repo_root = temp.path();
     write_file(&repo_root.join("src/lib.rs"), "pub fn example() {}\n");
     write_file(
         &repo_root.join("nested/module/input.rs"),
@@ -108,5 +98,4 @@ fn collect_package_watch_paths_includes_nested_inputs_and_skips_generated_trees(
     assert!(actual.contains(&PathBuf::from("nested/module")));
     assert!(!actual.iter().any(|path| path.starts_with(".git")));
     assert!(!actual.iter().any(|path| path.starts_with("target")));
-    fs::remove_dir_all(repo_root).expect("cleanup temp repo");
 }

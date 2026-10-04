@@ -31,3 +31,4 @@ mcp-toolkit-provenance = { version = "0.1.0", git = "https://github.com/sednalab
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+tempfile = "=3.24.0"

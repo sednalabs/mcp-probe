@@ -544,41 +544,8 @@ mod tests {
     use crate::provenance::capture_runtime_provenance;
     use std::fs;
     use std::io;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use tempfile::TempDir;
     use time::Duration;
-
-    struct TestTempDir {
-        path: PathBuf,
-    }
-
-    impl TestTempDir {
-        fn new(prefix: &str) -> Self {
-            static COUNTER: AtomicU64 = AtomicU64::new(1);
-
-            for _ in 0..128 {
-                let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-                let path =
-                    std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
-                match create_test_temp_dir(&path) {
-                    Ok(()) => return Self { path },
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => panic!("create private test directory: {error}"),
-                }
-            }
-
-            panic!("could not reserve a unique test directory")
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     fn create_test_temp_dir(path: &Path) -> io::Result<()> {
         let mut builder = fs::DirBuilder::new();
@@ -590,7 +557,7 @@ mod tests {
         builder.create(path)
     }
 
-    fn base_config(mode: StartupAdmissionMode, temp_dir: &TestTempDir) -> StartupAdmissionConfig {
+    fn base_config(mode: StartupAdmissionMode, temp_dir: &TempDir) -> StartupAdmissionConfig {
         StartupAdmissionConfig {
             mode,
             required_profile: TestGateProfile::Fast,
@@ -620,7 +587,7 @@ mod tests {
 
     #[test]
     fn temp_dir_creation_does_not_adopt_an_existing_path() {
-        let temp = TestTempDir::new("mcp-probe-admission-collision");
+        let temp = TempDir::new().expect("create private test directory");
         let occupied = temp.path().join("occupied");
         fs::create_dir(&occupied).expect("create occupied directory");
         let sentinel = occupied.join("sentinel.json");
@@ -636,7 +603,7 @@ mod tests {
 
     #[test]
     fn admission_warn_mode_allows_missing_gate() {
-        let temp = TestTempDir::new("mcp-probe-admission-warn");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Warn, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
@@ -647,7 +614,7 @@ mod tests {
 
     #[test]
     fn admission_strict_rejects_missing_gate() {
-        let temp = TestTempDir::new("mcp-probe-admission-missing");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Strict, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
@@ -658,7 +625,7 @@ mod tests {
 
     #[test]
     fn strict_admission_rejects_unknown_runtime_provenance_before_gate_match() {
-        let temp = TestTempDir::new("mcp-probe-admission-unknown-runtime");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Strict, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
@@ -684,7 +651,7 @@ mod tests {
 
     #[test]
     fn strict_admission_rejects_gate_artifact_with_unknown_identity_values() {
-        let temp = TestTempDir::new("mcp-probe-admission-unknown-gate");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Strict, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
@@ -715,7 +682,7 @@ mod tests {
 
     #[test]
     fn admission_strict_passes_with_valid_gate_json() {
-        let temp = TestTempDir::new("mcp-probe-admission-valid");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Strict, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
@@ -731,7 +698,7 @@ mod tests {
 
     #[test]
     fn admission_strict_rejects_stale_gate() {
-        let temp = TestTempDir::new("mcp-probe-admission-stale");
+        let temp = TempDir::new().expect("create private test directory");
         let config = base_config(StartupAdmissionMode::Strict, &temp);
         let exe = temp.path().join("probe-exe");
         fs::write(&exe, "bin").expect("write exe");
