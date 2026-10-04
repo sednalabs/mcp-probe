@@ -122,6 +122,10 @@ Run a streamable HTTP probe:
 mcp-probe run --transport streamable-http --url http://127.0.0.1:8000/mcp
 ```
 
+The Streamable HTTP client does not follow redirects, including same-origin
+redirects, so configured default headers are not forwarded to a redirect
+target. Provide the final endpoint URL directly.
+
 Run a ChatGPT tool descriptor check:
 
 ```bash

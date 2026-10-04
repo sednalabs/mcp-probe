@@ -892,9 +892,13 @@ pub async fn run_oauth_flow(options: OAuthFlowOptions) -> Result<CachedTokens> {
 #[cfg(test)]
 mod tests {
     use super::{enforce_registration_endpoint_expectation, oauth_redirect_url};
-    use rmcp::transport::auth::AuthorizationManager;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use oauth2::HttpResponse;
+    use rmcp::transport::auth::{
+        AuthorizationManager, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
+        OAuthHttpRequest,
+    };
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
     use tokio::time::{timeout, Duration};
 
     #[test]
@@ -923,60 +927,55 @@ mod tests {
         assert_eq!(url.path(), "/oauth/callback");
     }
 
+    struct RecordingOAuthHttpClient {
+        responses: Mutex<VecDeque<HttpResponse>>,
+        destinations: Mutex<Vec<String>>,
+    }
+
+    impl OAuthHttpClient for RecordingOAuthHttpClient {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            let destination = request.request.uri().to_string();
+            self.destinations
+                .lock()
+                .expect("destination lock")
+                .push(destination);
+            let response = self.responses.lock().expect("response lock").pop_front();
+
+            Box::pin(async move {
+                response.ok_or_else(|| OAuthHttpClientError::new("unexpected OAuth HTTP request"))
+            })
+        }
+    }
+
     #[tokio::test]
     async fn oauth_metadata_rejects_private_authorization_server() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind local OAuth metadata fixture");
-        let address = listener.local_addr().expect("read fixture address");
-        let server_url = format!("http://{address}/mcp");
-        let resource_metadata_url =
-            format!("http://{address}/.well-known/oauth-protected-resource");
-        let server_url_for_metadata = server_url.clone();
-
-        let fixture = tokio::spawn(async move {
-            let mut requests = Vec::new();
-            let (mut request, _) = listener.accept().await.expect("accept server request");
-            let mut bytes = vec![0; 4096];
-            let count = request.read(&mut bytes).await.expect("read server request");
-            requests.push(String::from_utf8_lossy(&bytes[..count]).into_owned());
-            let challenge = format!(
-                "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer resource_metadata=\"{resource_metadata_url}\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
-            request
-                .write_all(challenge.as_bytes())
-                .await
-                .expect("write resource-metadata challenge");
-
-            let (mut request, _) = timeout(Duration::from_secs(1), listener.accept())
-                .await
-                .expect("resource-metadata request should arrive")
-                .expect("accept resource-metadata request");
-            let mut bytes = vec![0; 4096];
-            let count = request
-                .read(&mut bytes)
-                .await
-                .expect("read resource-metadata request");
-            requests.push(String::from_utf8_lossy(&bytes[..count]).into_owned());
-            let payload = serde_json::json!({
-                "resource": server_url_for_metadata,
-                "authorization_servers": ["http://169.254.169.254/latest/meta-data"]
-            })
-            .to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                payload.len()
-            );
-            request
-                .write_all(response.as_bytes())
-                .await
-                .expect("write resource metadata");
-            requests
+        let server_url = "http://probe.example/mcp";
+        let resource_metadata_url = "http://probe.example/.well-known/oauth-protected-resource";
+        let unauthorized = HttpResponse::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                format!("Bearer resource_metadata=\"{resource_metadata_url}\""),
+            )
+            .body(Vec::new())
+            .expect("build controlled challenge response");
+        let metadata = serde_json::json!({
+            "resource": server_url,
+            "authorization_servers": ["http://169.254.169.254/latest/meta-data"]
         });
-
-        let manager = AuthorizationManager::new(server_url)
-            .await
-            .expect("construct OAuth manager");
+        let metadata = HttpResponse::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(&metadata).expect("serialize controlled metadata"))
+            .expect("build controlled metadata response");
+        let http_client = Arc::new(RecordingOAuthHttpClient {
+            responses: Mutex::new(VecDeque::from([unauthorized, metadata])),
+            destinations: Mutex::new(Vec::new()),
+        });
+        let manager =
+            AuthorizationManager::new_with_oauth_http_client(server_url, http_client.clone())
+                .await
+                .expect("construct OAuth manager with injected client");
         let result = timeout(Duration::from_secs(2), manager.discover_metadata())
             .await
             .expect("metadata discovery should terminate");
@@ -984,13 +983,20 @@ mod tests {
             result.is_err(),
             "private authorization server must be rejected"
         );
-        let requests = fixture.await.expect("finish local metadata fixture");
+        let destinations = http_client
+            .destinations
+            .lock()
+            .expect("destination lock")
+            .clone();
         assert_eq!(
-            requests.len(),
+            destinations.len(),
             2,
-            "no private authorization-server request is made"
+            "only the server and same-origin resource-metadata requests are made"
         );
-        assert!(requests[0].starts_with("GET /mcp "));
-        assert!(requests[1].starts_with("GET /.well-known/oauth-protected-resource "));
+        assert_eq!(destinations[0], server_url);
+        assert_eq!(destinations[1], resource_metadata_url);
+        assert!(destinations
+            .iter()
+            .all(|destination| !destination.contains("169.254.169.254")));
     }
 }
